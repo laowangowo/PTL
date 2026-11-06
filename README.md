@@ -34,3 +34,9 @@ PainThunderLauncher/
 ```
 
 战雷更新相关源码：`PainThunderLauncher/PTL/Modules/ModWarThunderSelfUpdate.vb`
+
+## 许可声明
+- 本项目虽参考了较大量的内容，但制作的软件与 PCL 的实质功能不存在任何重叠，故属于轻度使用。
+- 本项目采用 **Non-Commercial, No-Paid-Content License with Attribution Requirement**。
+
+允许免费分发与非商业使用；禁止一切商业使用；禁止将本项目用于任何包含付费内容、付费门槛或收费安排的使用场景；修改或参考本项目应保留适当署名。详见 [LICENSE](./LICENSE)。
