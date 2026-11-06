@@ -1,0 +1,424 @@
+Public Class PageWarThunderComponents
+    Implements IRefreshable
+
+    Private Mode As WarThunderComponentKind = WarThunderComponentKind.Sights
+    Private IsRefreshing As Boolean
+    Private IsRemoving As Boolean
+    Private PreviewRequestId As Integer
+    Private PreviewRenderId As Integer
+    Private PreviewComponentPath As String = ""
+    Private IsPopulatingSightFiles As Boolean
+    Private IsPreviewBackgroundInitialized As Boolean
+    Private PreviewBackgroundColor As System.Drawing.Color
+
+    Private Sub PageRefresh() Handles Me.Loaded, Me.PageEnter
+        If Not IsLoaded Then Return
+        InitializePreviewBackground()
+        PanBack.ScrollToHome()
+        RefreshPage()
+    End Sub
+
+    Public Sub SetMode(Kind As WarThunderComponentKind)
+        If Mode = Kind Then Return
+        Mode = Kind
+        ClearSightPreview()
+        If IsLoaded Then RefreshPage()
+    End Sub
+
+    Public Sub RefreshPage()
+        If IsRefreshing OrElse IsRemoving Then Return
+        IsRefreshing = True
+        BtnRefresh.IsEnabled = False
+        LabStatus.Text =
+            $"正在读取已安装{WarThunderComponentKindName(Mode)}…"
+        RunInNewThread(
+        Sub()
+            Dim Components = WarThunderEnumerateInstalledComponents(Mode)
+            RunInUi(
+            Sub()
+                IsRefreshing = False
+                BtnRefresh.IsEnabled = True
+                BuildComponentList(Components)
+                RefreshTarget()
+                Dim KindName As String = WarThunderComponentKindName(Mode)
+                LabStatus.Text = If(Components.Count = 0,
+                    $"当前没有安装{KindName}组件。",
+                    $"已安装 {Components.Count} 个{KindName}组件。")
+            End Sub)
+        End Sub, "War Thunder Component Scan", ThreadPriority.BelowNormal)
+    End Sub
+
+    Private Sub RefreshTarget()
+        Dim KindName As String = WarThunderComponentKindName(Mode)
+        CardComponents.Title = $"已安装{KindName}"
+        Dim Root As String = WarThunderGetComponentRoot(Mode)
+        If Mode = WarThunderComponentKind.Sights OrElse
+           Mode = WarThunderComponentKind.Camouflage Then
+            Dim UserId As String = WarThunderGetActiveUserId()
+            LabTarget.Text = If(Root = "",
+                $"未找到当前玩家的{KindName}目录。",
+                $"当前玩家 UID：{UserId} {Root}")
+        Else
+            LabTarget.Text = If(Root = "",
+                "未找到战争雷霆声音模组目录。",
+                Root)
+        End If
+        BtnOpen.IsEnabled = Root <> ""
+    End Sub
+
+    Private Sub BuildComponentList(Components As List(Of WarThunderInstalledComponent))
+        PanComponents.Children.Clear()
+        If Components.Count = 0 Then Return
+        For Each ComponentItem As WarThunderInstalledComponent In Components
+            Dim Component = ComponentItem
+            Dim Card As New Border With {
+                .Margin = New Thickness(0, 0, 0, 9),
+                .Padding = New Thickness(14, 11, 14, 11),
+                .CornerRadius = New CornerRadius(6),
+                .BorderThickness = New Thickness(1),
+                .BorderBrush = TryCast(FindResource("ColorBrushGray1"), Media.Brush),
+                .Background = TryCast(FindResource("ColorBrushSemiTransparent"), Media.Brush)
+            }
+            Dim Layout As New Grid()
+            Layout.ColumnDefinitions.Add(New ColumnDefinition With {
+                .Width = New GridLength(1, GridUnitType.Star)
+            })
+            Layout.ColumnDefinitions.Add(New ColumnDefinition With {
+                .Width = GridLength.Auto
+            })
+            Dim Details As New StackPanel With {
+                .Tag = Component
+            }
+            If Mode = WarThunderComponentKind.Sights Then
+                Details.Background = Media.Brushes.Transparent
+                Details.Cursor = System.Windows.Input.Cursors.Hand
+                Details.ToolTip = "双击载入瞄具预览"
+                AddHandler Details.PreviewMouseLeftButtonDown,
+                    AddressOf ComponentDetails_PreviewMouseLeftButtonDown
+            End If
+            Details.Children.Add(New TextBlock With {
+                .Text = Component.Name,
+                .FontSize = 14,
+                .FontWeight = FontWeights.SemiBold,
+                .TextTrimming = TextTrimming.CharacterEllipsis,
+                .Foreground = TryCast(FindResource("ColorBrush1"), Media.Brush)
+            })
+            Details.Children.Add(New TextBlock With {
+                .Text = $"{Component.FileCount} 个文件: {FormatSize(Component.TotalSize)}",
+                .Margin = New Thickness(0, 4, 0, 0),
+                .FontSize = 11.5,
+                .Foreground = TryCast(FindResource("ColorBrushGray2"), Media.Brush)
+            })
+            Details.Children.Add(New TextBlock With {
+                .Text = Component.Path,
+                .Margin = New Thickness(0, 3, 12, 0),
+                .FontSize = 10.5,
+                .TextTrimming = TextTrimming.CharacterEllipsis,
+                .Foreground = TryCast(FindResource("ColorBrushGray2"), Media.Brush),
+                .ToolTip = Component.Path
+            })
+            Layout.Children.Add(Details)
+            Dim Actions As New StackPanel With {
+                .Orientation = Orientation.Horizontal,
+                .VerticalAlignment = VerticalAlignment.Center,
+                .Margin = New Thickness(14, 0, 0, 0)
+            }
+            If Mode = WarThunderComponentKind.Sights Then
+                Dim PreviewButton As New MyButton With {
+                    .Text = "预览",
+                    .Width = 76,
+                    .Height = 34,
+                    .Margin = New Thickness(0, 0, 8, 0),
+                    .VerticalAlignment = VerticalAlignment.Center,
+                    .ColorType = MyButton.ColorState.Highlight,
+                    .Tag = Component
+                }
+                AddHandler PreviewButton.Click, AddressOf PreviewButton_Click
+                Actions.Children.Add(PreviewButton)
+            End If
+            Dim RemoveButton As New MyButton With {
+                .Text = "卸载",
+                .Width = 86,
+                .Height = 34,
+                .VerticalAlignment = VerticalAlignment.Center,
+                .ColorType = MyButton.ColorState.Red,
+                .Tag = Component
+            }
+            AddHandler RemoveButton.Click, AddressOf RemoveButton_Click
+            Actions.Children.Add(RemoveButton)
+            Grid.SetColumn(Actions, 1)
+            Layout.Children.Add(Actions)
+            Card.Child = Layout
+            PanComponents.Children.Add(Card)
+        Next
+    End Sub
+
+    Private Sub PreviewButton_Click(sender As Object, e As EventArgs)
+        If Mode <> WarThunderComponentKind.Sights Then Return
+        Dim Component = TryCast(CType(sender, FrameworkElement).Tag,
+                                WarThunderInstalledComponent)
+        If Component Is Nothing Then Return
+        ShowSightPreview(Component)
+    End Sub
+
+    Private Sub ComponentDetails_PreviewMouseLeftButtonDown(
+        sender As Object, e As MouseButtonEventArgs)
+        If Mode <> WarThunderComponentKind.Sights OrElse e.ClickCount <> 2 Then Return
+        Dim Component = TryCast(CType(sender, FrameworkElement).Tag,
+                                WarThunderInstalledComponent)
+        If Component Is Nothing Then Return
+        ShowSightPreview(Component)
+        e.Handled = True
+    End Sub
+
+    Private Sub ShowSightPreview(Component As WarThunderInstalledComponent)
+        PreviewRequestId += 1
+        PreviewRenderId += 1
+        Dim RequestId As Integer = PreviewRequestId
+        PreviewComponentPath = Component.Path
+        CardPreview.Visibility = Visibility.Visible
+        PanBack.ScrollToHome()
+        ImgSightPreview.Source = Nothing
+        LabPreviewPlaceholder.Visibility = Visibility.Visible
+        LabPreviewPlaceholder.Text = "正在读取瞄具…"
+        LabPreviewFile.Text = Component.Name
+        LabPreviewStatus.Text = "正在查找瞄具定义文件…"
+        LabPreviewStatus.Foreground = TryCast(
+            FindResource("ColorBrushGray2"), Media.Brush)
+        ComboSightFiles.Items.Clear()
+        ComboSightFiles.IsEnabled = False
+        BtnPreviewReload.IsEnabled = False
+
+        RunInNewThread(
+        Sub()
+            Dim Files As List(Of String) =
+                WarThunderFindSightDefinitionFiles(Component.Path)
+            RunInUi(
+            Sub()
+                If RequestId <> PreviewRequestId OrElse
+                   Mode <> WarThunderComponentKind.Sights Then
+                    Return
+                End If
+                If Files.Count = 0 Then
+                    LabPreviewPlaceholder.Text = "没有找到 BLK 瞄具文件"
+                    LabPreviewStatus.Text =
+                        "这个组件中没有可读取的 BLK 瞄具定义文件。"
+                    Return
+                End If
+
+                IsPopulatingSightFiles = True
+                Try
+                    For Each FilePath As String In Files
+                        Dim DisplayPath As String = FilePath
+                        If IO.Directory.Exists(Component.Path) Then
+                            DisplayPath = FilePath.Substring(
+                                Component.Path.TrimEnd(IO.Path.DirectorySeparatorChar).Length).
+                                TrimStart(IO.Path.DirectorySeparatorChar)
+                        Else
+                            DisplayPath = IO.Path.GetFileName(FilePath)
+                        End If
+                        ComboSightFiles.Items.Add(New MyComboBoxItem With {
+                            .Content = DisplayPath,
+                            .Tag = FilePath
+                        })
+                    Next
+                    ComboSightFiles.IsEnabled = Files.Count > 1
+                    ComboSightFiles.SelectedIndex = 0
+                Finally
+                    IsPopulatingSightFiles = False
+                End Try
+                RenderSelectedSightPreview()
+            End Sub)
+        End Sub, "War Thunder Sight Preview Scan", ThreadPriority.BelowNormal)
+    End Sub
+
+    Private Sub ComboSightFiles_SelectionChanged(
+        sender As Object, e As SelectionChangedEventArgs) Handles ComboSightFiles.SelectionChanged
+        If IsPopulatingSightFiles Then Return
+        RenderSelectedSightPreview()
+    End Sub
+
+    Private Sub InitializePreviewBackground()
+        If IsPreviewBackgroundInitialized Then Return
+        IsPreviewBackgroundInitialized = True
+        Dim SavedValue As String = Settings.Get(Of String)(
+            "WarThunderSightPreviewBackground")
+        ApplyPreviewBackground(
+            WarThunderParseSightPreviewBackground(SavedValue),
+            SaveSetting:=False,
+            Redraw:=False)
+    End Sub
+
+    Private Sub ApplyPreviewBackground(
+        Value As System.Drawing.Color,
+        Optional SaveSetting As Boolean = True,
+        Optional Redraw As Boolean = True)
+        PreviewBackgroundColor = System.Drawing.Color.FromArgb(
+            255, Value.R, Value.G, Value.B)
+        Dim ColorValue As Media.Color = Media.Color.FromRgb(
+            PreviewBackgroundColor.R,
+            PreviewBackgroundColor.G,
+            PreviewBackgroundColor.B)
+        PreviewBackgroundSwatch.Background =
+            New Media.SolidColorBrush(ColorValue)
+        Dim HexValue As String =
+            WarThunderFormatSightPreviewBackground(PreviewBackgroundColor)
+        LabPreviewBackground.Text = $"预览背景: {HexValue}"
+        BtnPreviewBackground.ToolTip = "选择瞄具预览的背景颜色"
+        If SaveSetting Then
+            Settings.Set("WarThunderSightPreviewBackground", HexValue)
+        End If
+        If Redraw AndAlso ComboSightFiles.SelectedItem IsNot Nothing Then
+            RenderSelectedSightPreview()
+        End If
+    End Sub
+
+    Private Sub BtnPreviewBackground_Click(
+        sender As Object, e As EventArgs) Handles BtnPreviewBackground.Click
+        Using Dialog As New Windows.Forms.ColorDialog()
+            Dialog.AllowFullOpen = True
+            Dialog.AnyColor = True
+            Dialog.FullOpen = True
+            Dialog.SolidColorOnly = True
+            Dialog.Color = PreviewBackgroundColor
+            If Dialog.ShowDialog() <> Windows.Forms.DialogResult.OK Then Return
+            ApplyPreviewBackground(Dialog.Color)
+        End Using
+    End Sub
+
+    Private Sub RenderSelectedSightPreview()
+        Dim Choice = TryCast(ComboSightFiles.SelectedItem, MyComboBoxItem)
+        If Choice Is Nothing Then Return
+        Dim BlkPath As String = Convert.ToString(Choice.Tag)
+        If String.IsNullOrWhiteSpace(BlkPath) OrElse Not IO.File.Exists(BlkPath) Then
+            LabPreviewPlaceholder.Text = "瞄具文件已经不存在"
+            LabPreviewPlaceholder.Visibility = Visibility.Visible
+            ImgSightPreview.Source = Nothing
+            LabPreviewStatus.Text = "请刷新组件列表后重试。"
+            BtnPreviewReload.IsEnabled = False
+            Return
+        End If
+
+        PreviewRenderId += 1
+        Dim RenderId As Integer = PreviewRenderId
+        Dim RequestId As Integer = PreviewRequestId
+        Dim BackgroundAtRender As System.Drawing.Color = PreviewBackgroundColor
+        ImgSightPreview.Source = Nothing
+        LabPreviewPlaceholder.Visibility = Visibility.Visible
+        LabPreviewPlaceholder.Text = "正在生成预览…"
+        LabPreviewFile.Text = IO.Path.GetFileName(BlkPath)
+        LabPreviewStatus.Text = "正在解析瞄具..."
+        LabPreviewStatus.Foreground = TryCast(
+            FindResource("ColorBrushGray2"), Media.Brush)
+        BtnPreviewReload.IsEnabled = False
+
+        RunInNewThread(
+        Sub()
+            Dim Preview As WarThunderSightPreviewResult = Nothing
+            Dim ErrorMessage As String = ""
+            Try
+                Preview = WarThunderRenderSightPreview(
+                    BlkPath, BackgroundAtRender)
+            Catch ex As Exception
+                ErrorMessage = ex.GetDisplay(False)
+                Logger.Warn(ex, $"生成瞄具预览失败：{BlkPath}")
+            End Try
+            RunInUi(
+            Sub()
+                If RenderId <> PreviewRenderId OrElse RequestId <> PreviewRequestId Then Return
+                BtnPreviewReload.IsEnabled = True
+                If Preview Is Nothing Then
+                    LabPreviewPlaceholder.Text = "预览生成失败"
+                    LabPreviewStatus.Text = ErrorMessage
+                    LabPreviewStatus.Foreground = TryCast(
+                        FindResource("ColorBrushRedLight"), Media.Brush)
+                    Return
+                End If
+                ImgSightPreview.Source = Preview.Image
+                LabPreviewPlaceholder.Visibility = Visibility.Collapsed
+                LabPreviewStatus.Text = ""
+                LabPreviewStatus.Foreground = TryCast(
+                    FindResource("ColorBrushGray2"), Media.Brush)
+            End Sub)
+        End Sub, "War Thunder Sight Preview Render", ThreadPriority.BelowNormal)
+    End Sub
+
+    Private Sub ClearSightPreview()
+        PreviewRequestId += 1
+        PreviewRenderId += 1
+        PreviewComponentPath = ""
+        IsPopulatingSightFiles = True
+        ComboSightFiles.Items.Clear()
+        IsPopulatingSightFiles = False
+        ComboSightFiles.IsEnabled = False
+        ImgSightPreview.Source = Nothing
+        LabPreviewFile.Text = "尚未选择瞄具"
+        LabPreviewStatus.Text = "选择瞄具后会自动生成预览。"
+        BtnPreviewReload.IsEnabled = False
+        CardPreview.Visibility = Visibility.Collapsed
+    End Sub
+
+    Private Sub BtnPreviewReload_Click(
+        sender As Object, e As EventArgs) Handles BtnPreviewReload.Click
+        RenderSelectedSightPreview()
+    End Sub
+
+    Private Sub RemoveButton_Click(sender As Object, e As EventArgs)
+        If IsRemoving Then Return
+        Dim Component = TryCast(CType(sender, FrameworkElement).Tag,
+                                WarThunderInstalledComponent)
+        If Component Is Nothing Then Return
+        Dim KindName As String = WarThunderComponentKindName(Component.Kind)
+        If MyMsgBox(
+            $"确定要卸载这个{KindName}组件吗？" & vbCrLf &
+            Component.Name & vbCrLf & vbCrLf &
+            "组件会被直接永久删除，无法恢复。",
+            "卸载组件", "卸载", "取消", IsWarn:=True) = 2 Then
+            Return
+        End If
+        IsRemoving = True
+        BtnRefresh.IsEnabled = False
+        RunInNewThread(
+        Sub()
+            Dim ErrorMessage As String = ""
+            Dim Success As Boolean = WarThunderRemoveInstalledComponent(
+                Component, ErrorMessage)
+            RunInUi(
+            Sub()
+                IsRemoving = False
+                BtnRefresh.IsEnabled = True
+                If Success Then
+                    If PreviewComponentPath = Component.Path Then ClearSightPreview()
+                    Hint($"已删除 {Component.Name}。", HintType.Green)
+                    RefreshPage()
+                Else
+                    MyMsgBox("卸载组件失败：" & vbCrLf & ErrorMessage,
+                             "卸载失败", IsWarn:=True)
+                End If
+            End Sub)
+        End Sub, "War Thunder Component Remove", ThreadPriority.AboveNormal)
+    End Sub
+
+    Private Sub BtnRefresh_Click(sender As Object, e As EventArgs) Handles BtnRefresh.Click
+        RefreshPage()
+    End Sub
+
+    Private Sub BtnOpen_Click(sender As Object, e As EventArgs) Handles BtnOpen.Click
+        Dim Root As String = WarThunderGetComponentRoot(Mode)
+        If Root = "" Then Return
+        Directory.CreateDirectory(Root)
+        OpenExplorer(Root & "\")
+    End Sub
+
+    Private Shared Function FormatSize(Bytes As Long) As String
+        If Bytes >= 1024L * 1024 * 1024 Then Return $"{Bytes / 1024 / 1024 / 1024:0.0} GB"
+        If Bytes >= 1024L * 1024 Then Return $"{Bytes / 1024 / 1024:0.0} MB"
+        If Bytes >= 1024 Then Return $"{Bytes / 1024:0.0} KB"
+        Return Bytes & " B"
+    End Function
+
+    Public Sub Refresh() Implements IRefreshable.Refresh
+        RefreshPage()
+    End Sub
+
+End Class

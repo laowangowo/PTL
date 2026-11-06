@@ -1,0 +1,116 @@
+<local:MyPageRight x:Class="PageWarThunderComponents"
+                   xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   xmlns:local="clr-namespace:PTL"
+                   PanScroll="PanBack">
+    <local:MyScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          x:Name="PanBack">
+        <StackPanel Margin="25,25,25,10">
+            <local:MyCard x:Name="CardPreview" Title="瞄具预览"
+                          Visibility="Collapsed">
+                <StackPanel Margin="25,38,23,16">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="300" />
+                            <ColumnDefinition Width="1*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="300" Height="300" CornerRadius="8"
+                                ClipToBounds="True"
+                                Background="{DynamicResource ColorBrushSemiTransparent}"
+                                BorderBrush="{DynamicResource ColorBrushGray1}"
+                                BorderThickness="1">
+                            <Grid>
+                                <Image x:Name="ImgSightPreview" Stretch="Uniform"
+                                       RenderOptions.BitmapScalingMode="HighQuality" />
+                                <TextBlock x:Name="LabPreviewPlaceholder"
+                                           Text="正在读取瞄具…"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           FontSize="12.5"
+                                           Foreground="{DynamicResource ColorBrushGray2}" />
+                            </Grid>
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="20,0,0,0">
+                            <TextBlock x:Name="LabPreviewFile" Text="尚未选择瞄具"
+                                       FontSize="14" FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource ColorBrush1}" />
+                            <TextBlock Text="瞄具定义文件"
+                                       Margin="0,16,0,7" FontSize="11.5"
+                                       Foreground="{DynamicResource ColorBrushGray2}" />
+                            <local:MyComboBox x:Name="ComboSightFiles"
+                                              Height="35" FontSize="12"
+                                              IsEnabled="False" />
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="PreviewBackgroundSwatch"
+                                        Width="30" Height="30"
+                                        CornerRadius="4"
+                                        BorderThickness="1"
+                                        BorderBrush="{DynamicResource ColorBrushGray1}"
+                                        Background="#A9BBC8" />
+                                <TextBlock x:Name="LabPreviewBackground"
+                                           Grid.Column="1"
+                                           Text="预览背景 · #A9BBC8"
+                                           Margin="9,0,8,0"
+                                           FontSize="11.5"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource ColorBrushGray2}" />
+                                <local:MyButton x:Name="BtnPreviewBackground"
+                                                Grid.Column="2"
+                                                Text="更改"
+                                                Width="66" Height="34" />
+                            </Grid>
+                            <TextBlock x:Name="LabPreviewStatus"
+                                       Text="选择瞄具后会自动生成预览。"
+                                       Margin="0,12,0,0" FontSize="11.5"
+                                       TextWrapping="Wrap" LineHeight="19"
+                                       Foreground="{DynamicResource ColorBrushGray2}" />
+                            <local:MyButton x:Name="BtnPreviewReload"
+                                            Text="重新载入预览"
+                                            Width="122" Height="34"
+                                            Margin="0,16,0,0"
+                                            HorizontalAlignment="Left"
+                                            IsEnabled="False" />
+                        </StackPanel>
+                    </Grid>
+                    
+                </StackPanel>
+            </local:MyCard>
+
+            <local:MyCard x:Name="CardComponents" Title="已安装瞄具"
+                          Margin="0,15,0,0">
+                <StackPanel Margin="25,38,23,16">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock x:Name="LabStatus" Text="正在读取已安装组件…"
+                                       FontSize="12.5" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource ColorBrushGray2}" />
+                            <TextBlock x:Name="LabTarget" Text=""
+                                       Margin="0,5,0,0" FontSize="11.5"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource ColorBrushGray2}" />
+                        </StackPanel>
+                        <local:MyButton x:Name="BtnRefresh" Grid.Column="1"
+                                        Text="刷新" Width="86" Height="34"
+                                        Margin="12,0,8,0" />
+                        <local:MyButton x:Name="BtnOpen" Grid.Column="2"
+                                        Text="打开目录" Width="105" Height="34" />
+                    </Grid>
+                    <StackPanel x:Name="PanComponents" Margin="0,14,0,0" />
+                </StackPanel>
+            </local:MyCard>
+
+        </StackPanel>
+    </local:MyScrollViewer>
+</local:MyPageRight>

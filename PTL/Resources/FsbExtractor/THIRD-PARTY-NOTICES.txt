@@ -1,0 +1,9 @@
+WarThunderFsbExtractor uses Fmod5Sharp 3.1.0.
+
+Fmod5Sharp
+Copyright (c) Sam Byass (Samboy063)
+Licensed under the MIT License.
+https://github.com/SamboyCoding/Fmod5Sharp
+
+The helper only extracts audio from a locally installed War Thunder client into
+PTL's local music cache. No War Thunder audio is included in this repository.

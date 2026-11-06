@@ -1,0 +1,93 @@
+<local:MyPageRight
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:PTL"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d" x:Class="PageSetupSystem"
+    PanScroll="PanBack">
+    <local:MyScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled" x:Name="PanBack">
+        <StackPanel x:Name="PanMain" Margin="25,10">
+            <local:MyCard Margin="0,15" Title="启动器">
+                <Grid Margin="25,40,25,20">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Name" />
+                        <ColumnDefinition Width="1*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="28" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="28" />
+                        <RowDefinition Height="18" />
+                        <RowDefinition Height="35" />
+                    </Grid.RowDefinitions>
+                    <TextBlock VerticalAlignment="Center" Text="启动器更新" Margin="0,0,25,0" />
+                    <local:MyComboBox x:Name="ComboSystemUpdate"
+                                      local:SettingService.Key="SystemSystemUpdate" Grid.Column="1">
+                        <local:MyComboBoxItem Content="有新版本时自动下载" />
+                        <local:MyComboBoxItem Content="有新版本时显示提示" />
+                        <local:MyComboBoxItem Content="关闭更新提示" />
+                    </local:MyComboBox>
+
+                    <TextBlock Grid.Row="2" VerticalAlignment="Center"
+                               Text="启动器更新与更改通知" Margin="0,0,25,0" />
+                    <local:MyComboBox x:Name="ComboSystemActivity"
+                                      local:SettingService.Key="SystemSystemActivity"
+                                      Grid.Row="2" Grid.Column="1">
+                        <local:MyComboBoxItem Content="显示所有更新与更改公告" />
+                        <local:MyComboBoxItem Content="仅显示重要通知" />
+                        <local:MyComboBoxItem Content="关闭通知" />
+                    </local:MyComboBox>
+
+                    <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Orientation="Horizontal">
+                        <local:MyButton x:Name="BtnSystemUpdate" MinWidth="140"
+                                        Text="检查启动器更新" Padding="13,0"
+                                        HorizontalAlignment="Left" ColorType="Highlight" />
+                        <TextBlock x:Name="LabLauncherVersion" VerticalAlignment="Center"
+                                   Margin="14,0,0,0" FontSize="12"
+                                   Foreground="{DynamicResource ColorBrushGray2}" />
+                    </StackPanel>
+                </Grid>
+            </local:MyCard>
+
+            <local:MyCard Margin="0,15" Title="百宝箱">
+                <StackPanel Margin="25,38,25,20" Orientation="Horizontal">
+                    <local:MyButton x:Name="BtnMemoryOptimize"
+                                    Text="内存优化" Width="105" Height="35"
+                                    Margin="0,0,10,0" ColorType="Highlight" />
+                    <local:MyButton x:Name="BtnDailyLuck"
+                                    Text="今日人品" Width="105" Height="35" />
+                </StackPanel>
+            </local:MyCard>
+
+            <local:MyCard Margin="0,15" Title="其他">
+                <Grid Margin="25,38,25,20">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Name" />
+                        <ColumnDefinition Width="1*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="28" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="35" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <local:MyCheckBox Grid.ColumnSpan="2"
+                                      local:SettingService.Key="SystemSystemTelemetry"
+                                      Text="使用数据统计" Height="22"
+                                      ToolTip="仅上报随机生成的设备 ID，用于统计启动器使用量；不会上传账号、玩家 ID 或游戏数据。" />
+                    <StackPanel Grid.Row="2" Orientation="Horizontal">
+                        <local:MyButton x:Name="BtnCopyMachineId" Text="复制识别码"
+                                        Width="105" Height="35" Margin="0,0,10,0" />
+                        <local:MyButton x:Name="BtnActivatePtl" Text="激活"
+                                        Width="105" Height="35" ColorType="Highlight" />
+                    </StackPanel>
+                    <TextBlock x:Name="LabActivationStatus" Grid.Row="3" Grid.ColumnSpan="2"
+                               Margin="0,12,0,0" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ColorBrushGray2}" />
+                </Grid>
+            </local:MyCard>
+        </StackPanel>
+    </local:MyScrollViewer>
+</local:MyPageRight>
