@@ -1,17 +1,9 @@
 # 战争雷霆玩家战绩查询 API
 
-> 服务：Pain Thunder Launcher（PTL）配套 Node.js 战绩服务
->
-> 固定服务地址：
->
-> `https://xn--1kqr09bgu2bzba.top`
->
-> 实测日期：2026-11-06
->
-> 对应实现：
-> [`server/app.js`](../server/app.js)、
-> [`server/lib/app-client.js`](../server/lib/app-client.js)、
-> [`server/README.md`](../server/README.md)
+> [!IMPORTANT]
+> 请勿频繁请求API，会封IP！
+
+API：`https://api.战争雷霆.top`
 
 ---
 
@@ -76,7 +68,7 @@ Access-Control-Allow-Headers: Authorization,Content-Type
 
 ```http
 GET /health HTTP/1.1
-Host: xn--1kqr09bgu2bzba.top
+Host: api.战争雷霆.top
 ```
 
 ### 3.2 响应
@@ -119,7 +111,7 @@ Host: xn--1kqr09bgu2bzba.top
 
 ```http
 GET /api/players/{uid}/stats?refresh=true&force=false HTTP/1.1
-Host: xn--1kqr09bgu2bzba.top
+Host: api.战争雷霆.top
 ```
 
 路径参数：
@@ -148,21 +140,21 @@ force=True     -> 被当作 false
 
 ```bash
 curl -L \
-  "https://xn--1kqr09bgu2bzba.top/api/players/194020182/stats"
+  "https://api.战争雷霆.top/api/players/194020182/stats"
 ```
 
 只读取缓存：
 
 ```bash
 curl -L \
-  "https://xn--1kqr09bgu2bzba.top/api/players/194020182/stats?refresh=false"
+  "https://api.战争雷霆.top/api/players/194020182/stats?refresh=false"
 ```
 
 强制刷新：
 
 ```bash
 curl -L \
-  "https://xn--1kqr09bgu2bzba.top/api/players/194020182/stats?refresh=true&force=true"
+  "https://api.战争雷霆.top/api/players/194020182/stats?refresh=true&force=true"
 ```
 
 Windows `cmd` 中 URL 含 `&` 时必须加双引号。
@@ -550,7 +542,7 @@ GET /api/players/by-nickname/{nickname}/stats
 中文昵称示例：
 
 ```text
-https://xn--1kqr09bgu2bzba.top/api/players/by-nickname/%E6%B5%8B%E8%AF%95%E7%8E%A9%E5%AE%B6/stats
+https://api.战争雷霆.top/api/players/by-nickname/%E6%B5%8B%E8%AF%95%E7%8E%A9%E5%AE%B6/stats
 ```
 
 参数与 UID 查询相同：
@@ -619,7 +611,7 @@ GET /api/players/search?nickname=NigelWu
 ```bash
 curl -L --get \
   --data-urlencode "nickname=NigelWu" \
-  "https://xn--1kqr09bgu2bzba.top/api/players/search"
+  "https://api.战争雷霆.top/api/players/search"
 ```
 
 ### 7.2 响应
@@ -661,7 +653,7 @@ GET /api/players/{uid}/snapshots?limit=20
 
 ```bash
 curl -L \
-  "https://xn--1kqr09bgu2bzba.top/api/players/194020182/snapshots?limit=3"
+  "https://api.战争雷霆.top/api/players/194020182/snapshots?limit=3"
 ```
 
 ### 8.2 响应
@@ -844,7 +836,7 @@ Content-Type: multipart/form-data
 curl -X POST \
   -H "Authorization: Bearer <token>" \
   -F "file=@avatar.png" \
-  "https://xn--1kqr09bgu2bzba.top/api/admin/players/194020182/avatar"
+  "https://api.战争雷霆.top/api/admin/players/194020182/avatar"
 ```
 
 响应：
@@ -902,7 +894,7 @@ curl -X POST \
 ### 12.1 按 UID 查询
 
 ```javascript
-const BASE_URL = "https://xn--1kqr09bgu2bzba.top";
+const BASE_URL = "https://api.战争雷霆.top";
 
 async function getPlayerStats(uid, { refresh = true, force = false } = {}) {
   const url = new URL(
