@@ -48,14 +48,14 @@ Public Class PageWarThunderResources
                 "尚未检测到当前玩家的 UserSights 目录",
                 Folder)
         ElseIf IsCamouflage Then
-            Dim UserId As String = WarThunderGetActiveUserId()
-            Dim Folder As String = WarThunderGetUserSkinsFolder(UserId)
+            Dim Folder As String = WarThunderGetUserSkinsFolder()
             LabDestination.Text = If(
                 Folder = "",
-                "尚未检测到当前玩家的 UserSkins 目录",
+                "尚未检测到游戏根目录的 UserSkins 目录",
                 Folder)
         Else
-            Dim Folder As String = WarThunderGetSoundModFolder()
+            Dim Folder As String =
+                WarThunderGetComponentRoot(WarThunderResourceKind.Sound)
             LabDestination.Text = If(
                 Folder = "",
                 "尚未找到战争雷霆 sound\mod 目录",
@@ -442,7 +442,7 @@ Public Class PageWarThunderResources
             Case WarThunderResourceKind.Camouflage
                 Return WarThunderGetUserSkinsFolder()
             Case Else
-                Return WarThunderGetSoundModFolder()
+                Return WarThunderGetComponentRoot(WarThunderResourceKind.Sound)
         End Select
     End Function
 

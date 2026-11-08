@@ -58,19 +58,21 @@ Public Module ModWarThunderConfig
         Logger.Info($"已保存战争雷霆启动设置：{ConfigPath}")
     End Sub
 
-    ''' <summary>
-    ''' 按战争雷霆模组说明启用 sound\mod。
-    ''' </summary>
-    Public Sub WarThunderSetSoundModEnabled(InstallPath As String, UseLoopsForGunSound As Boolean)
+    Public Function WarThunderReadSoundUseLoops(InstallPath As String) As Boolean
         Dim ConfigPath As String = Path.Combine(InstallPath, "config.blk")
         If Not File.Exists(ConfigPath) Then Throw New FileNotFoundException("未找到战争雷霆配置文件。", ConfigPath)
         Dim Text As String = File.ReadAllText(ConfigPath)
-        Text = WarThunderWriteBlkKey(Text, "sound", "enable_mod", "b", True, False)
-        If UseLoopsForGunSound Then
-            Text = WarThunderWriteBlkKey(Text, "sound", "useLoopsForGunSound", "b", True, False)
-        End If
+        Return WarThunderReadBlkBool(Text, "sound", "useLoopsForGunSound", False)
+    End Function
+
+    Public Sub WarThunderSetSoundUseLoops(InstallPath As String, Enabled As Boolean)
+        Dim ConfigPath As String = Path.Combine(InstallPath, "config.blk")
+        If Not File.Exists(ConfigPath) Then Throw New FileNotFoundException("未找到战争雷霆配置文件。", ConfigPath)
+        Dim Text As String = File.ReadAllText(ConfigPath)
+        Text = WarThunderWriteBlkKey(
+            Text, "sound", "useLoopsForGunSound", "b", Enabled, False)
         WarThunderWriteConfig(ConfigPath, Text)
-        Logger.Info($"已启用战争雷霆声音模组：{ConfigPath}")
+        Logger.Info($"已设置循环枪声音效选项：{Enabled}（{ConfigPath}）")
     End Sub
 
     Private Sub WarThunderWriteConfig(ConfigPath As String, Text As String)

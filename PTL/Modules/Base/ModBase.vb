@@ -6,7 +6,7 @@ Public Module ModBase
 #Region "声明"
 
     '下列版本信息由更新器自动修改
-    Public Const PtlVersion As String = "1.0.2" 'PTL 在线服务使用的正式版本号
+    Public Const PtlVersion As String = "1.0.5" 'PTL 在线服务使用的正式版本号
     Public Const VersionBaseName As String = PtlVersion '显示用版本名
     Public Const CommitHash As String = "" 'Commit Hash，由 GitHub Workflow 自动替换
 #If RELEASE Then

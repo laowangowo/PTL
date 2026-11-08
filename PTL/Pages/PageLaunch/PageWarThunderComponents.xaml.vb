@@ -52,16 +52,19 @@ Public Class PageWarThunderComponents
         Dim KindName As String = WarThunderComponentKindName(Mode)
         CardComponents.Title = $"已安装{KindName}"
         Dim Root As String = WarThunderGetComponentRoot(Mode)
-        If Mode = WarThunderComponentKind.Sights OrElse
-           Mode = WarThunderComponentKind.Camouflage Then
+        If Mode = WarThunderComponentKind.Sights Then
             Dim UserId As String = WarThunderGetActiveUserId()
             LabTarget.Text = If(Root = "",
                 $"未找到当前玩家的{KindName}目录。",
                 $"当前玩家 UID：{UserId} {Root}")
+        ElseIf Mode = WarThunderComponentKind.Camouflage Then
+            LabTarget.Text = If(Root = "",
+                "未找到战争雷霆 UserSkins 目录。",
+                $"涂装会按文件夹安装到游戏目录：{Root}")
         Else
             LabTarget.Text = If(Root = "",
-                "未找到战争雷霆声音模组目录。",
-                Root)
+                "未找到战争雷霆 sound 目录。",
+                $"音效包会安装到 sound\mod，不会修改游戏原版文件：{Root}")
         End If
         BtnOpen.IsEnabled = Root <> ""
     End Sub
@@ -369,10 +372,20 @@ Public Class PageWarThunderComponents
                                 WarThunderInstalledComponent)
         If Component Is Nothing Then Return
         Dim KindName As String = WarThunderComponentKindName(Component.Kind)
+        Dim ConfirmText As String
+        If Component.IsManagedSoundOverlay Then
+            ConfirmText =
+                $"确定要卸载这个{KindName}吗？" & vbCrLf &
+                Component.Name & vbCrLf & vbCrLf &
+                "安装前的原版 sound 文件将从备份恢复。"
+        Else
+            ConfirmText =
+                $"确定要卸载这个{KindName}组件吗？" & vbCrLf &
+                Component.Name & vbCrLf & vbCrLf &
+                "组件会被直接永久删除，无法恢复。"
+        End If
         If MyMsgBox(
-            $"确定要卸载这个{KindName}组件吗？" & vbCrLf &
-            Component.Name & vbCrLf & vbCrLf &
-            "组件会被直接永久删除，无法恢复。",
+            ConfirmText,
             "卸载组件", "卸载", "取消", IsWarn:=True) = 2 Then
             Return
         End If
@@ -389,7 +402,11 @@ Public Class PageWarThunderComponents
                 BtnRefresh.IsEnabled = True
                 If Success Then
                     If PreviewComponentPath = Component.Path Then ClearSightPreview()
-                    Hint($"已删除 {Component.Name}。", HintType.Green)
+                    Hint(
+                        If(Component.IsManagedSoundOverlay,
+                           $"已卸载 {Component.Name} 并恢复原版 sound 文件。",
+                           $"已删除 {Component.Name}。"),
+                        HintType.Green)
                     RefreshPage()
                 Else
                     MyMsgBox("卸载组件失败：" & vbCrLf & ErrorMessage,

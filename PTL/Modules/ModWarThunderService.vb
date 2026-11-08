@@ -6,6 +6,8 @@ Imports Newtonsoft.Json.Linq
 Public Module ModWarThunderService
 
     Public Const ServiceBaseUrl As String = "https://xn--1kqr09bgu2bzba.top"
+    'api.战争雷霆.top 的 Punycode 形式，避免旧版 .NET Framework 的 IDN 兼容差异。
+    Public Const WarThunderStatsApiBaseUrl As String = "https://api.xn--1kqr09bgu2bzba.top"
 
     Public Function WarThunderServiceGet(PathValue As String) As JToken
         Return WarThunderServiceGetUrl(WarThunderResolveServiceUrl(PathValue))
@@ -56,21 +58,35 @@ Public Module ModWarThunderService
         Return ServiceBaseUrl & If(Value.StartsWith("/"), "", "/") & Value
     End Function
 
+    Public Function WarThunderResolveStatsApiUrl(PathOrUrl As String) As String
+        Dim Value As String = If(PathOrUrl, "").Trim()
+        If Value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) OrElse
+           Value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) Then
+            Return Value
+        End If
+        If Value.StartsWith("//") Then Return "https:" & Value
+        Return WarThunderStatsApiBaseUrl & If(Value.StartsWith("/"), "", "/") & Value
+    End Function
+
     Public Function WarThunderFetchPlayerStats(UserId As String,
                                                Optional Refresh As Boolean = True) As JObject
         Dim Suffix As String = If(Refresh, "?refresh=true", "")
-        Return CType(WarThunderServiceGet($"/api/players/{Uri.EscapeDataString(UserId)}/stats{Suffix}"), JObject)
+        Return CType(WarThunderServiceGetUrl(
+            WarThunderResolveStatsApiUrl(
+                $"/api/players/{Uri.EscapeDataString(UserId)}/stats{Suffix}")), JObject)
     End Function
 
     Public Function WarThunderFetchPlayerStatsByNickname(Nickname As String) As JObject
-        Return CType(WarThunderServiceGet(
-            $"/api/players/by-nickname/{Uri.EscapeDataString(Nickname.Trim())}/stats"), JObject)
+        Return CType(WarThunderServiceGetUrl(
+            WarThunderResolveStatsApiUrl(
+                $"/api/players/by-nickname/{Uri.EscapeDataString(Nickname.Trim())}/stats")), JObject)
     End Function
 
     Public Function WarThunderFetchPlayerSnapshots(UserId As String,
                                                    Optional Limit As Integer = 20) As JArray
-        Return CType(WarThunderServiceGet(
-            $"/api/players/{Uri.EscapeDataString(UserId)}/snapshots?limit={Limit}"), JArray)
+        Return CType(WarThunderServiceGetUrl(
+            WarThunderResolveStatsApiUrl(
+                $"/api/players/{Uri.EscapeDataString(UserId)}/snapshots?limit={Limit}")), JArray)
     End Function
 
     Public Function WarThunderFetchResourceCatalog(Kind As String) As JArray
@@ -237,7 +253,7 @@ Public Module ModWarThunderService
                 Client.Timeout = TimeSpan.FromSeconds(15)
                 Client.DefaultRequestHeaders.UserAgent.ParseAdd("PTL/" & PtlVersion)
                 Using Response As HttpResponseMessage = Client.GetAsync(
-                    $"{ServiceBaseUrl}/api/players/{Uri.EscapeDataString(UserId)}/avatar",
+                    $"{WarThunderStatsApiBaseUrl}/api/players/{Uri.EscapeDataString(UserId)}/avatar",
                     HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()
                     If Response.StatusCode = Net.HttpStatusCode.NotFound Then Return ""
                     Response.EnsureSuccessStatusCode()
@@ -283,8 +299,9 @@ Public Module ModWarThunderService
     Private Function WarThunderTryDownloadAvatarFromStats(
         UserId As String, DestinationFolder As String) As String
         Try
-            Dim Stats = CType(WarThunderServiceGet(
-                $"/api/players/{Uri.EscapeDataString(UserId)}/stats?refresh=false"), JObject)
+            Dim Stats = CType(WarThunderServiceGetUrl(
+                WarThunderResolveStatsApiUrl(
+                    $"/api/players/{Uri.EscapeDataString(UserId)}/stats?refresh=false")), JObject)
             Dim Player = TryCast(Stats("player"), JObject)
             If Player Is Nothing Then Return ""
             Using Client As New HttpClient()
@@ -303,7 +320,7 @@ Public Module ModWarThunderService
                 End If
                 For Each Candidate In Candidates.Distinct(StringComparer.OrdinalIgnoreCase)
                     If String.IsNullOrWhiteSpace(Candidate) Then Continue For
-                    Dim AvatarUrl As String = WarThunderResolveServiceUrl(Candidate)
+                    Dim AvatarUrl As String = WarThunderResolveStatsApiUrl(Candidate)
                     If AvatarUrl.IndexOf("/api/players/", StringComparison.OrdinalIgnoreCase) >= 0 Then
                         Continue For
                     End If

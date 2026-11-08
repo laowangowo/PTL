@@ -5,18 +5,6 @@ Public Class FormMain
 
 #Region "基础"
 
-    '更新日志
-    Private Sub ShowUpdateLog(LastVersion As Integer)
-        If LastVersion >= VersionCode Then Return
-        Dim Content As String =
-            "· 已更新至 PTL " & VersionDisplay & vbCrLf &
-            "· 保留战争雷霆启动、更新、玩家资料、组件管理、音乐与下载任务功能"
-        RunInNewThread(
-        Sub()
-            MyMsgBox(Content, "PTL 已更新至" & VersionDisplay, "确定")
-        End Sub, "UpdateLog Output")
-    End Sub
-
     '窗口加载
     Private IsWindowLoadFinished As Boolean = False
     Public Sub New()
@@ -182,7 +170,6 @@ Public Class FormMain
     Private Sub UpgradeSub(LastVersionCode As Integer)
         Logger.Info($"版本号从 {LastVersionCode} 升高到 {VersionCode}")
         Settings.Set("SystemLastVersionReg", VersionCode)
-        If LastVersionCode > 0 Then ShowUpdateLog(LastVersionCode)
     End Sub
 
     Private Sub DowngradeSub(LastVersionCode As Integer)

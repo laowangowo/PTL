@@ -23,6 +23,7 @@ Public Module ModPtlOnline
     Private Const UpdatePromptValue As String = "LastPromptedUpdateVersion"
     Private Const AnnouncementValue As String = "LastAnnouncementKey"
     Private Const DeviceIdValue As String = "DeviceId"
+    Private Const ShownUpdateNoticeValue As String = "LastShownUpdateNoticeKey"
     Private ReadOnly UpdateLock As New Object()
     Private ReadOnly UpdateDownloadLock As New Object()
     Private ReadOnly AnnouncementLock As New Object()
@@ -39,6 +40,13 @@ Public Module ModPtlOnline
         Get
             Return IO.Path.Combine(
                 Paths.AppDataThenName, "PendingUpdateNotice.json")
+        End Get
+    End Property
+
+    Private ReadOnly Property LegacyPendingUpdateNoticePath As String
+        Get
+            Return IO.Path.Combine(
+                Paths.AppData, "PCLWT", "PendingUpdateNotice.json")
         End Get
     End Property
 
@@ -603,10 +611,11 @@ Public Module ModPtlOnline
     End Sub
 
     Private Sub PtlShowPendingUpdateNotice()
-        If Not IO.File.Exists(PendingUpdateNoticePath) Then Return
+        Dim ClaimedNoticePath As String = PtlClaimPendingUpdateNotice()
+        If ClaimedNoticePath = "" Then Return
         Try
             Dim Notice As JObject = JObject.Parse(
-                IO.File.ReadAllText(PendingUpdateNoticePath))
+                IO.File.ReadAllText(ClaimedNoticePath))
             Dim TargetVersion As String =
                 If(Notice.Value(Of String)("target_version"), "").Trim()
             If Not TargetVersion.Equals(
@@ -617,6 +626,17 @@ Public Module ModPtlOnline
                 If(Notice.Value(Of String)("published_at"), "").Trim()
             Dim Changelog As String =
                 If(Notice.Value(Of String)("changelog"), "").Trim()
+            Dim SavedAt As String =
+                If(Notice.Value(Of String)("saved_at_utc"), "").Trim()
+            Dim NoticeKey As String =
+                PtlComputeHash($"{TargetVersion}|{SavedAt}|{Changelog}")
+            If RegistryUtils.TryRead(
+                OnlineRegistryKey, ShownUpdateNoticeValue, "").ToString() = NoticeKey Then
+                Logger.Info($"忽略已展示过的 PTL 更新日志：{TargetVersion}")
+                Return
+            End If
+            RegistryUtils.Write(
+                OnlineRegistryKey, ShownUpdateNoticeValue, NoticeKey)
             If Changelog = "" Then
                 Changelog = "此版本未提供更新日志。"
             End If
@@ -629,20 +649,38 @@ Public Module ModPtlOnline
                     Changelog,
                     $"PTL 已更新至 {TargetVersion}",
                     "确定")
-                Try
-                    IO.File.Delete(PendingUpdateNoticePath)
-                Catch ex As Exception
-                    Logger.Warn(ex, "清理已展示的更新日志失败")
-                End Try
             End Sub)
         Catch ex As Exception
             Logger.Warn(ex, "读取待展示的 PTL 更新日志失败")
+        Finally
             Try
-                IO.File.Delete(PendingUpdateNoticePath)
-            Catch
+                IO.File.Delete(ClaimedNoticePath)
+            Catch ex As Exception
+                Logger.Warn(ex, "清理已展示的更新日志失败")
             End Try
         End Try
     End Sub
+
+    Private Function PtlClaimPendingUpdateNotice() As String
+        Dim NoticePaths As String() = {
+            PendingUpdateNoticePath,
+            LegacyPendingUpdateNoticePath
+        }
+        For Each NoticePath As String In NoticePaths.Distinct(
+            StringComparer.OrdinalIgnoreCase)
+            If Not IO.File.Exists(NoticePath) Then Continue For
+            Dim ClaimedPath As String =
+                $"{NoticePath}.{Guid.NewGuid():N}.showing"
+            Try
+                '先原子领取通知，避免重复启动或弹窗异常时再次展示同一次更新日志。
+                IO.File.Move(NoticePath, ClaimedPath)
+                Return ClaimedPath
+            Catch ex As Exception
+                Logger.Warn(ex, $"领取待展示的 PTL 更新日志失败：{NoticePath}")
+            End Try
+        Next
+        Return ""
+    End Function
 
     Public Sub PtlCheckAnnouncementAsync()
         If Settings.Get(Of Integer)("SystemSystemActivity") = 2 Then Return

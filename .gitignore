@@ -12,3 +12,6 @@
 
 # Node 服务端运行数据
 server
+build.bat
+WARTHUNDER_README.md
+.gitignore

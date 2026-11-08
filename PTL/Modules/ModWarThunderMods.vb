@@ -33,10 +33,7 @@ Public Module ModWarThunderMods
         ".bank", ".fev", ".fsb", ".wav", ".ogg", ".mp3", ".flac", ".wem",
         ".txt", ".json", ".ini", ".cfg", ".blk", ".md"
     }
-    Private ReadOnly SoundKnownRoots As String() = {
-        "engines", "crew", "weapons", "aircraft", "tanks", "ships", "helicopters",
-        "music", "ui", "effects", "ambience", "explosions", "guns", "voices", "mod"
-    }
+    Private ReadOnly SoundPayloadExtensions As String() = {".bank"}
 
     Public Function WarThunderResourceKindName(Kind As WarThunderResourceKind) As String
         Select Case Kind
@@ -65,15 +62,14 @@ Public Module ModWarThunderMods
     End Function
 
     Public Function WarThunderGetUserSkinsFolder(Optional UserId As String = "") As String
-        If String.IsNullOrWhiteSpace(UserId) Then UserId = WarThunderGetActiveUserId()
-        Dim UserFolder As String = WarThunderGetUserFolder(UserId)
-        If UserFolder = "" Then Return ""
-        Return Path.Combine(UserFolder, "production", "UserSkins")
-    End Function
-
-    Public Function WarThunderGetSoundModFolder() As String
-        If WarThunderCurrentInstall Is Nothing OrElse WarThunderCurrentInstall.InstallPath = "" Then Return ""
-        Return Path.Combine(WarThunderCurrentInstall.InstallPath, "sound", "mod")
+        If WarThunderCurrentInstall Is Nothing OrElse
+           Not WarThunderCurrentInstall.IsValid OrElse
+           String.IsNullOrWhiteSpace(WarThunderCurrentInstall.InstallPath) Then
+            Return ""
+        End If
+        Return Path.Combine(
+            Path.GetFullPath(WarThunderCurrentInstall.InstallPath),
+            "UserSkins")
     End Function
 
     ''' <summary>
@@ -293,102 +289,213 @@ Public Module ModWarThunderMods
         If PathUtils.GetExtension(FilePath) <> "zip" Then
             Throw New InvalidDataException("涂装资源必须是 ZIP 压缩包。")
         End If
-        Dim UserId As String = WarThunderGetActiveUserId()
-        Dim Destination As String = WarThunderGetUserSkinsFolder(UserId)
+        Dim Destination As String = WarThunderGetUserSkinsFolder()
         If Destination = "" Then
             Throw New DirectoryNotFoundException(
-                "请先选择有效的战争雷霆玩家档案，再安装涂装。")
+                "请先检测到战争雷霆安装目录，再安装涂装。")
         End If
         Directory.CreateDirectory(Destination)
-        Dim BackupRoot As String = WarThunderCreateBackupRoot("Camouflage")
         Dim Count As Integer
+        Dim InstalledFolders As New List(Of String)
+        Dim StagingFolder As String = Path.Combine(
+            Destination, ".ptl-camouflage-" & Guid.NewGuid().ToString("N"))
 
-        Using Archive As ZipArchive = ZipFile.OpenRead(FilePath)
-            WarThunderValidateArchive(Archive)
-            For Each Entry In Archive.Entries
-                If Entry.FullName.EndsWithF("/") Then Continue For
-                Dim RelativePath As String =
-                    WarThunderNormalizeCamouflageEntry(Entry.FullName)
-                Dim Extension As String =
-                    Path.GetExtension(RelativePath).ToLowerInvariant()
-                If RelativePath = "" OrElse
-                   Not CamouflageExtensions.Contains(Extension) Then Continue For
-                Dim TargetPath As String =
-                    WarThunderSafeTargetPath(Destination, RelativePath)
-                Directory.CreateDirectory(Path.GetDirectoryName(TargetPath))
-                If File.Exists(TargetPath) AndAlso BackupRoot <> "" Then
-                    WarThunderBackupFile(TargetPath, BackupRoot, Destination)
-                End If
-                Using Input = Entry.Open()
-                    Using Output As New FileStream(
-                        TargetPath, FileMode.Create, FileAccess.Write, FileShare.None)
-                        Input.CopyTo(Output)
+        Try
+            Directory.CreateDirectory(StagingFolder)
+            Using Archive As ZipArchive = ZipFile.OpenRead(FilePath)
+                WarThunderValidateArchive(Archive)
+                For Each Entry In Archive.Entries
+                    If Entry.FullName.EndsWithF("/") Then Continue For
+                    Dim RelativePath As String =
+                        WarThunderNormalizeCamouflageEntry(Entry.FullName)
+                    Dim Extension As String =
+                        Path.GetExtension(RelativePath).ToLowerInvariant()
+                    If RelativePath = "" OrElse
+                       Not CamouflageExtensions.Contains(Extension) Then Continue For
+                    Dim TargetPath As String =
+                        WarThunderSafeTargetPath(StagingFolder, RelativePath)
+                    Directory.CreateDirectory(Path.GetDirectoryName(TargetPath))
+                    Using Input = Entry.Open()
+                        Using Output As New FileStream(
+                            TargetPath, FileMode.Create, FileAccess.Write, FileShare.None)
+                            Input.CopyTo(Output)
+                        End Using
                     End Using
-                End Using
-                Count += 1
-            Next
-        End Using
+                    Count += 1
+                Next
+            End Using
 
-        If Count = 0 Then
-            Throw New InvalidDataException(
-                "压缩包中没有找到可安装的涂装定义或纹理文件。")
-        End If
-        WarThunderLog($"已安装 {Count} 个涂装文件到 {Destination}")
-        Return New WarThunderInstallSummary With {
-            .Success = True,
-            .Kind = WarThunderResourceKind.Camouflage,
-            .FileCount = Count,
-            .Destination = Destination,
-            .Message =
-                $"已安装 {Count} 个涂装文件。进入游戏后在对应载具的外观设置中启用。"
-        }
+            If Count = 0 Then
+                Throw New InvalidDataException(
+                    "压缩包中没有找到可安装的涂装定义或纹理文件。")
+            End If
+
+            For Each SourceFolder As String In Directory.GetDirectories(StagingFolder)
+                Dim FolderName As String = WarThunderGetUniqueCamouflageFolderName(
+                    Destination, Path.GetFileName(SourceFolder))
+                Dim TargetFolder As String = Path.Combine(Destination, FolderName)
+                Directory.Move(SourceFolder, TargetFolder)
+                InstalledFolders.Add(TargetFolder)
+            Next
+
+            Dim RootFiles As String() = Directory.GetFiles(StagingFolder)
+            If RootFiles.Length > 0 Then
+                Dim FolderName As String = WarThunderGetUniqueCamouflageFolderName(
+                    Destination, Path.GetFileNameWithoutExtension(FilePath))
+                Dim TargetFolder As String = Path.Combine(Destination, FolderName)
+                Directory.CreateDirectory(TargetFolder)
+                For Each SourceFile As String In RootFiles
+                    File.Move(SourceFile, Path.Combine(TargetFolder, Path.GetFileName(SourceFile)))
+                Next
+                InstalledFolders.Add(TargetFolder)
+            End If
+
+            If InstalledFolders.Count = 0 Then
+                Throw New InvalidDataException("没有生成有效的涂装文件夹。")
+            End If
+            WarThunderRegisterCamouflageFolders(
+                Destination, InstalledFolders, FilePath)
+            WarThunderLog(
+                $"已安装 {Count} 个涂装文件到 {InstalledFolders.Count} 个文件夹：{Destination}")
+            Return New WarThunderInstallSummary With {
+                .Success = True,
+                .Kind = WarThunderResourceKind.Camouflage,
+                .FileCount = Count,
+                .Destination = Destination,
+                .Message =
+                    $"已安装 {InstalledFolders.Count} 个涂装文件夹，共 {Count} 个文件。" &
+                    "进入游戏后在对应载具的外观设置中启用。"
+            }
+        Catch
+            For Each Folder As String In InstalledFolders
+                Try
+                    If Directory.Exists(Folder) Then Directory.Delete(Folder, True)
+                Catch
+                End Try
+            Next
+            Throw
+        Finally
+            Try
+                If Directory.Exists(StagingFolder) Then
+                    Directory.Delete(StagingFolder, True)
+                End If
+            Catch
+            End Try
+        End Try
+    End Function
+
+    Private Function WarThunderGetUniqueCamouflageFolderName(
+        Root As String, DesiredName As String) As String
+        Dim Name As String = If(DesiredName, "").Trim()
+        If Name = "" Then Name = "涂装"
+        For Each InvalidCharacter As Char In Path.GetInvalidFileNameChars()
+            Name = Name.Replace(InvalidCharacter, "_"c)
+        Next
+        Name = Name.Trim().TrimEnd("."c)
+        If Name = "" OrElse Name = "." OrElse Name = ".." Then Name = "涂装"
+        If Name.StartsWith(".", StringComparison.Ordinal) Then Name = "_" & Name
+
+        Dim Candidate As String = Name
+        Dim Suffix As Integer = 2
+        While Directory.Exists(Path.Combine(Root, Candidate)) OrElse
+              File.Exists(Path.Combine(Root, Candidate))
+            Candidate = $"{Name} ({Suffix})"
+            Suffix += 1
+        End While
+        Return Candidate
     End Function
 
     Private Function WarThunderInstallSoundFile(FilePath As String,
                                                 UseLoopsForGunSound As Boolean) As WarThunderInstallSummary
-        Dim Destination As String = WarThunderGetSoundModFolder()
-        If Destination = "" Then Throw New DirectoryNotFoundException("请先检测到战争雷霆安装目录。")
+        If WarThunderGetGameProcessIds().Any() Then
+            Throw New InvalidOperationException("请先关闭战争雷霆，再安装语音包。")
+        End If
+        Dim Destination As String =
+            WarThunderGetComponentRoot(WarThunderResourceKind.Sound)
+        If Destination = "" Then
+            Throw New DirectoryNotFoundException("请先检测到战争雷霆 sound 目录。")
+        End If
         Directory.CreateDirectory(Destination)
-        Dim BackupRoot As String = WarThunderCreateBackupRoot("Sound")
         Dim Count As Integer
+        Dim HasWaveVersion As Boolean
+        Dim UseWaveVersion As Boolean
 
         Using Archive As ZipArchive = ZipFile.OpenRead(FilePath)
             WarThunderValidateArchive(Archive)
+            HasWaveVersion = Archive.Entries.Any(
+                Function(Entry) WarThunderSoundEntryUsesWave(Entry.FullName))
+            If HasWaveVersion Then
+                UseWaveVersion = MyMsgBox(
+                    "压缩包内包含 W.A.V.E 降噪音库。" & vbCrLf &
+                    "是否使用 W.A.V.E 降噪版本？",
+                    "选择语音版本",
+                    "启用降噪",
+                    "不启用",
+                    ForceWait:=True) = 1
+            End If
+
             Dim EligibleFiles As New List(Of KeyValuePair(Of ZipArchiveEntry, String))
             For Each Entry In Archive.Entries
                 If Entry.FullName.EndsWithF("/") Then Continue For
-                Dim RelativePath As String = WarThunderNormalizeSoundEntry(Entry.FullName)
+                Dim RelativePath As String =
+                    WarThunderNormalizeSoundEntry(Entry.FullName)
                 If RelativePath = "" OrElse
-                   Not SoundExtensions.Contains(Path.GetExtension(RelativePath).ToLowerInvariant()) Then Continue For
-                EligibleFiles.Add(New KeyValuePair(Of ZipArchiveEntry, String)(Entry, RelativePath))
-            Next
-            EligibleFiles = WarThunderStripSingleSoundWrapper(EligibleFiles)
-            For Each Item In EligibleFiles
-                Dim Entry As ZipArchiveEntry = Item.Key
-                Dim RelativePath As String = Item.Value
-                Dim TargetPath As String = WarThunderSafeTargetPath(Destination, RelativePath)
-                Directory.CreateDirectory(Path.GetDirectoryName(TargetPath))
-                If File.Exists(TargetPath) AndAlso BackupRoot <> "" Then
-                    WarThunderBackupFile(TargetPath, BackupRoot, Destination)
+                   Not SoundPayloadExtensions.Contains(
+                       Path.GetExtension(RelativePath).ToLowerInvariant()) Then Continue For
+                If WarThunderSoundEntryUsesWave(RelativePath) <> UseWaveVersion Then
+                    Continue For
                 End If
+                EligibleFiles.Add(
+                    New KeyValuePair(Of ZipArchiveEntry, String)(Entry, RelativePath))
+            Next
+
+            '语音包必须全部平铺在 sound\mod 根目录，不能保留 ZIP 内目录。
+            Dim FlatFiles As New Dictionary(
+                Of String, KeyValuePair(Of ZipArchiveEntry, String))(
+                StringComparer.OrdinalIgnoreCase)
+            For Each Item In EligibleFiles
+                Dim FileName As String = Path.GetFileName(Item.Value)
+                If FileName = "" OrElse FlatFiles.ContainsKey(FileName) Then Continue For
+                FlatFiles(FileName) = Item
+            Next
+            If FlatFiles.Count = 0 Then
+                Throw New InvalidDataException(
+                    If(HasWaveVersion AndAlso UseWaveVersion,
+                       "W.A.V.E 文件夹中没有找到可安装的 .bank 语音文件。",
+                       "压缩包中没有找到可安装的 .bank 语音文件。"))
+            End If
+
+            For Each Item In FlatFiles.Values
+                Dim Entry As ZipArchiveEntry = Item.Key
+                Dim FileName As String = Path.GetFileName(Item.Value)
+                Dim TargetPath As String =
+                    WarThunderSafeTargetPath(Destination, FileName)
+                Dim TempPath As String = TargetPath & ".ptl-new"
+                FileUtils.Delete(TempPath)
                 Using Input = Entry.Open()
-                    Using Output As New FileStream(TargetPath, FileMode.Create, FileAccess.Write, FileShare.None)
+                    Using Output As New FileStream(
+                        TempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)
                         Input.CopyTo(Output)
                     End Using
                 End Using
+                WarThunderReplaceFileAtomically(TempPath, TargetPath)
                 Count += 1
             Next
         End Using
 
-        If Count = 0 Then Throw New InvalidDataException("压缩包中没有找到 FMOD、FSB 或常见音频文件。")
-        WarThunderSetSoundModEnabled(WarThunderCurrentInstall.InstallPath, UseLoopsForGunSound)
-        WarThunderLog($"已安装 {Count} 个声音模组文件到 {Destination}")
+        If UseLoopsForGunSound Then
+            WarThunderSetSoundUseLoops(
+                WarThunderCurrentInstall.InstallPath, True)
+        End If
+        WarThunderLog($"已安装 {Count} 个语音文件到 {Destination}")
         Return New WarThunderInstallSummary With {
             .Success = True,
             .Kind = WarThunderResourceKind.Sound,
             .FileCount = Count,
             .Destination = Destination,
-            .Message = $"已安装 {Count} 个声音文件，并已在 config.blk 中启用声音模组。"
+            .Message =
+                $"已将 {Count} 个 .bank 文件平铺安装到 sound\mod" &
+                If(HasWaveVersion AndAlso UseWaveVersion, "，已启用 W.A.V.E 降噪版本。", "。")
         }
     End Function
 
@@ -510,20 +617,17 @@ Public Module ModWarThunderMods
         Return Value
     End Function
 
-    Private Function WarThunderStripSingleSoundWrapper(
-        Files As List(Of KeyValuePair(Of ZipArchiveEntry, String))) As List(Of KeyValuePair(Of ZipArchiveEntry, String))
-        If Files.Count = 0 Then Return Files
-        Dim Prefixes As List(Of String) = Files.
-            Select(Function(item) item.Value.Split("/"c)(0)).
-            Distinct(StringComparer.OrdinalIgnoreCase).
-            ToList()
-        If Prefixes.Count <> 1 OrElse Files.Any(Function(item) Not item.Value.Contains("/")) Then Return Files
-        Dim RootName As String = Prefixes(0)
-        If SoundKnownRoots.Contains(RootName, StringComparer.OrdinalIgnoreCase) Then Return Files
-        Dim PrefixLength As Integer = RootName.Length + 1
-        Return Files.Select(
-            Function(item) New KeyValuePair(Of ZipArchiveEntry, String)(
-                item.Key, item.Value.Substring(PrefixLength))).ToList()
+    Private Function WarThunderSoundEntryUsesWave(PathValue As String) As Boolean
+        Dim Parts As String() =
+            If(PathValue, "").Replace("\", "/").Split(
+                New Char() {"/"c}, StringSplitOptions.RemoveEmptyEntries)
+        For Index As Integer = 0 To Parts.Length - 2
+            If Parts(Index).IndexOf(
+                "W.A.V.E", StringComparison.OrdinalIgnoreCase) >= 0 Then
+                Return True
+            End If
+        Next
+        Return False
     End Function
 
     Private Function WarThunderSafeTargetPath(Root As String, RelativePath As String) As String
@@ -534,6 +638,15 @@ Public Module ModWarThunderMods
         End If
         Return TargetPath
     End Function
+
+    Private Sub WarThunderReplaceFileAtomically(Source As String, Target As String)
+        Directory.CreateDirectory(Path.GetDirectoryName(Target))
+        If File.Exists(Target) Then
+            File.Replace(Source, Target, Nothing, True)
+        Else
+            File.Move(Source, Target)
+        End If
+    End Sub
 
     Private Sub WarThunderSafeCopy(Source As String, Target As String, BackupRoot As String, Root As String)
         Directory.CreateDirectory(Path.GetDirectoryName(Target))

@@ -62,8 +62,11 @@ Public Class MyWarThunderResourceItem
 
     Private Sub Item_MouseLeftButtonUp(sender As Object, e As MouseButtonEventArgs) _
         Handles Me.PreviewMouseLeftButtonUp
-        If IsInsideButton(TryCast(e.OriginalSource, DependencyObject)) Then Return
-        If Not String.IsNullOrWhiteSpace(PostUrl) Then RaiseEvent OpenPostRequested(PostUrl)
+        If IsInsideActionButton(TryCast(e.OriginalSource, DependencyObject)) Then Return
+        If Not String.IsNullOrWhiteSpace(PostUrl) Then
+            e.Handled = True
+            RaiseEvent OpenPostRequested(PostUrl)
+        End If
     End Sub
 
     Private Sub Item_MouseEnter(sender As Object, e As MouseEventArgs) Handles Me.MouseEnter
@@ -74,9 +77,13 @@ Public Class MyWarThunderResourceItem
         RowBackground.SetResourceReference(Border.BackgroundProperty, "ColorBrushSemiTransparent")
     End Sub
 
-    Private Shared Function IsInsideButton(Source As DependencyObject) As Boolean
+    Private Function IsInsideActionButton(Source As DependencyObject) As Boolean
         Dim Current As DependencyObject = Source
         Do While Current IsNot Nothing
+            If ReferenceEquals(Current, BtnInstall) OrElse
+               ReferenceEquals(Current, BtnPost) Then
+                Return True
+            End If
             If TypeOf Current Is Button Then Return True
             Try
                 If TypeOf Current Is Media.Visual Then
