@@ -2,6 +2,7 @@ Public Enum WarThunderComponentKind
     Sights
     Camouflage
     Sound
+    Text
 End Enum
 
 Public Class WarThunderInstalledComponent
@@ -66,8 +67,17 @@ Public Module ModWarThunderComponents
                 Return WarThunderGetUserSightsFolder()
             Case WarThunderComponentKind.Camouflage
                 Return WarThunderGetUserSkinsFolder()
-            Case Else
+            Case WarThunderComponentKind.Sound
                 Return WarThunderGetSoundModFolder()
+            Case WarThunderComponentKind.Text
+                If WarThunderCurrentInstall Is Nothing OrElse
+                   Not WarThunderCurrentInstall.IsValid Then
+                    Return ""
+                End If
+                Return Path.Combine(
+                    WarThunderCurrentInstall.InstallPath, "lang")
+            Case Else
+                Return ""
         End Select
     End Function
 
@@ -77,8 +87,12 @@ Public Module ModWarThunderComponents
                 Return "瞄具"
             Case WarThunderComponentKind.Camouflage
                 Return "涂装"
-            Case Else
+            Case WarThunderComponentKind.Sound
                 Return "音效包"
+            Case WarThunderComponentKind.Text
+                Return "文本"
+            Case Else
+                Return "组件"
         End Select
     End Function
 
@@ -89,6 +103,9 @@ Public Module ModWarThunderComponents
         End If
         If Kind = WarThunderComponentKind.Sound Then
             Return WarThunderEnumerateSoundComponents()
+        End If
+        If Kind = WarThunderComponentKind.Text Then
+            Return WarThunderEnumerateTextFiles()
         End If
 
         Dim Result As New List(Of WarThunderInstalledComponent)
@@ -124,6 +141,44 @@ Public Module ModWarThunderComponents
             Logger.Warn(ex, $"扫描战争雷霆{WarThunderComponentKindName(Kind)}组件失败")
         End Try
         Return Result.OrderBy(Function(item) item.Name, StringComparer.CurrentCultureIgnoreCase).ToList()
+    End Function
+
+    Private Function WarThunderEnumerateTextFiles() As List(Of WarThunderInstalledComponent)
+        Dim Result As New List(Of WarThunderInstalledComponent)
+        Dim Root As String = WarThunderGetComponentRoot(WarThunderComponentKind.Text)
+        If Root = "" OrElse Not Directory.Exists(Root) Then Return Result
+        Try
+            Dim RootPrefix As String =
+                Path.GetFullPath(Root).TrimEnd("\"c) & "\"
+            Dim Files As List(Of String) = Directory.EnumerateFiles(
+                Root, "*", SearchOption.AllDirectories).
+                OrderBy(Function(CandidatePath) CandidatePath,
+                        StringComparer.CurrentCultureIgnoreCase).
+                ToList()
+            For Each FilePath As String In Files
+                Dim Extension As String = Path.GetExtension(FilePath)
+                If Not Extension.Equals(
+                    ".csv", StringComparison.OrdinalIgnoreCase) AndAlso
+                   Not Extension.Equals(
+                       ".blk", StringComparison.OrdinalIgnoreCase) Then
+                    Continue For
+                End If
+                Dim FullPath As String = Path.GetFullPath(FilePath)
+                Dim RelativePath As String =
+                    FullPath.Substring(RootPrefix.Length).Replace("\", "/")
+                Dim Info As New FileInfo(FullPath)
+                Result.Add(New WarThunderInstalledComponent With {
+                    .Kind = WarThunderComponentKind.Text,
+                    .Name = RelativePath,
+                    .Path = FullPath,
+                    .FileCount = 1,
+                    .TotalSize = Info.Length
+                })
+            Next
+        Catch ex As Exception
+            Logger.Warn(ex, "扫描战争雷霆本地化文本失败")
+        End Try
+        Return Result
     End Function
 
     Private ReadOnly Property CamouflageIndexPath As String

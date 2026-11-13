@@ -15,6 +15,7 @@ Public Class PageWarThunderComponents
         If Not IsLoaded Then Return
         InitializePreviewBackground()
         PanBack.ScrollToHome()
+        UpdateModeUi()
         RefreshPage()
     End Sub
 
@@ -22,13 +23,37 @@ Public Class PageWarThunderComponents
         If Mode = Kind Then Return
         Mode = Kind
         ClearSightPreview()
+        UpdateModeUi()
         If IsLoaded Then RefreshPage()
+    End Sub
+
+    Private Sub UpdateModeUi()
+        Dim IsTextMode As Boolean = Mode = WarThunderComponentKind.Text
+        BtnTextToggle.Visibility =
+            If(IsTextMode, Visibility.Visible, Visibility.Collapsed)
+        BtnTextGuide.Visibility =
+            If(IsTextMode, Visibility.Visible, Visibility.Collapsed)
+        BtnOpen.Text = If(IsTextMode, "打开文本目录", "打开目录")
+        If IsTextMode AndAlso WarThunderCurrentInstall IsNot Nothing AndAlso
+           WarThunderCurrentInstall.IsValid Then
+            Try
+                BtnTextToggle.Text = If(
+                    WarThunderIsTestLocalizationEnabled(
+                        WarThunderCurrentInstall.InstallPath),
+                    "停用自定义文本",
+                    "启用自定义文本")
+            Catch ex As Exception
+                Logger.Warn(ex, "读取自定义本地化开关失败")
+                BtnTextToggle.Text = "启用自定义文本"
+            End Try
+        End If
     End Sub
 
     Public Sub RefreshPage()
         If IsRefreshing OrElse IsRemoving Then Return
         IsRefreshing = True
         BtnRefresh.IsEnabled = False
+        BtnTextToggle.IsEnabled = False
         LabStatus.Text =
             $"正在读取已安装{WarThunderComponentKindName(Mode)}…"
         RunInNewThread(
@@ -38,19 +63,30 @@ Public Class PageWarThunderComponents
             Sub()
                 IsRefreshing = False
                 BtnRefresh.IsEnabled = True
+                BtnTextToggle.IsEnabled = True
                 BuildComponentList(Components)
                 RefreshTarget()
                 Dim KindName As String = WarThunderComponentKindName(Mode)
-                LabStatus.Text = If(Components.Count = 0,
-                    $"当前没有安装{KindName}组件。",
-                    $"已安装 {Components.Count} 个{KindName}组件。")
+                If Mode = WarThunderComponentKind.Text Then
+                    LabStatus.Text = If(
+                        Components.Count = 0,
+                        "当前没有可编辑的 CSV 或 BLK 文本文件。",
+                        $"找到 {Components.Count} 个可编辑文本文件。")
+                Else
+                    LabStatus.Text = If(Components.Count = 0,
+                        $"当前没有安装{KindName}组件。",
+                        $"已安装 {Components.Count} 个{KindName}组件。")
+                End If
             End Sub)
         End Sub, "War Thunder Component Scan", ThreadPriority.BelowNormal)
     End Sub
 
     Private Sub RefreshTarget()
         Dim KindName As String = WarThunderComponentKindName(Mode)
-        CardComponents.Title = $"已安装{KindName}"
+        CardComponents.Title = If(
+            Mode = WarThunderComponentKind.Text,
+            "本地化文本",
+            $"已安装{KindName}")
         Dim Root As String = WarThunderGetComponentRoot(Mode)
         If Mode = WarThunderComponentKind.Sights Then
             Dim UserId As String = WarThunderGetActiveUserId()
@@ -61,6 +97,21 @@ Public Class PageWarThunderComponents
             LabTarget.Text = If(Root = "",
                 "未找到战争雷霆 UserSkins 目录。",
                 $"涂装会按文件夹安装到游戏目录：{Root}")
+        ElseIf Mode = WarThunderComponentKind.Text Then
+            Dim Enabled As Boolean = False
+            If WarThunderCurrentInstall IsNot Nothing AndAlso
+               WarThunderCurrentInstall.IsValid Then
+                Try
+                    Enabled = WarThunderIsTestLocalizationEnabled(
+                        WarThunderCurrentInstall.InstallPath)
+                Catch ex As Exception
+                    Logger.Warn(ex, "读取自定义本地化状态失败")
+                End Try
+            End If
+            LabTarget.Text = If(Root = "",
+                "未找到战争雷霆安装目录。",
+                $"{If(Enabled, "自定义文本已启用", "自定义文本尚未启用")} · {Root}" & vbCrLf &
+                "请使用支持 UTF-8 的编辑器修改 CSV，并保持原有列结构。")
         Else
             LabTarget.Text = If(Root = "",
                 "未找到战争雷霆 sound 目录。",
@@ -139,16 +190,29 @@ Public Class PageWarThunderComponents
                 AddHandler PreviewButton.Click, AddressOf PreviewButton_Click
                 Actions.Children.Add(PreviewButton)
             End If
-            Dim RemoveButton As New MyButton With {
-                .Text = "卸载",
-                .Width = 86,
-                .Height = 34,
-                .VerticalAlignment = VerticalAlignment.Center,
-                .ColorType = MyButton.ColorState.Red,
-                .Tag = Component
-            }
-            AddHandler RemoveButton.Click, AddressOf RemoveButton_Click
-            Actions.Children.Add(RemoveButton)
+            If Mode = WarThunderComponentKind.Text Then
+                Dim EditButton As New MyButton With {
+                    .Text = "编辑",
+                    .Width = 86,
+                    .Height = 34,
+                    .VerticalAlignment = VerticalAlignment.Center,
+                    .ColorType = MyButton.ColorState.Highlight,
+                    .Tag = Component
+                }
+                AddHandler EditButton.Click, AddressOf EditTextButton_Click
+                Actions.Children.Add(EditButton)
+            Else
+                Dim RemoveButton As New MyButton With {
+                    .Text = "卸载",
+                    .Width = 86,
+                    .Height = 34,
+                    .VerticalAlignment = VerticalAlignment.Center,
+                    .ColorType = MyButton.ColorState.Red,
+                    .Tag = Component
+                }
+                AddHandler RemoveButton.Click, AddressOf RemoveButton_Click
+                Actions.Children.Add(RemoveButton)
+            End If
             Grid.SetColumn(Actions, 1)
             Layout.Children.Add(Actions)
             Card.Child = Layout
@@ -364,6 +428,76 @@ Public Class PageWarThunderComponents
     Private Sub BtnPreviewReload_Click(
         sender As Object, e As EventArgs) Handles BtnPreviewReload.Click
         RenderSelectedSightPreview()
+    End Sub
+
+    Private Sub EditTextButton_Click(sender As Object, e As EventArgs)
+        Dim Component = TryCast(CType(sender, FrameworkElement).Tag,
+                                WarThunderInstalledComponent)
+        If Component Is Nothing OrElse Not IO.File.Exists(Component.Path) Then
+            Hint("文本文件已经不存在，请刷新列表。", HintType.Red)
+            Return
+        End If
+        Try
+            Process.Start(New ProcessStartInfo With {
+                .FileName = Component.Path,
+                .WorkingDirectory = IO.Path.GetDirectoryName(Component.Path),
+                .UseShellExecute = True
+            })
+        Catch ex As Exception
+            Logger.Warn(ex, $"打开本地化文本失败：{Component.Path}")
+            MyMsgBox(
+                "无法打开文本编辑器。" & vbCrLf &
+                "请先为 CSV 文件关联 Notepad++、Visual Studio Code 等编辑器。" &
+                vbCrLf & vbCrLf & ex.GetDisplay(False),
+                "无法编辑文本", IsWarn:=True)
+        End Try
+    End Sub
+
+    Private Sub BtnTextToggle_Click(sender As Object, e As EventArgs) _
+        Handles BtnTextToggle.Click
+        If WarThunderCurrentInstall Is Nothing OrElse
+           Not WarThunderCurrentInstall.IsValid Then
+            Hint("请先选择战争雷霆安装目录。", HintType.Red)
+            Return
+        End If
+        Try
+            Dim Enabled As Boolean = WarThunderIsTestLocalizationEnabled(
+                WarThunderCurrentInstall.InstallPath)
+            If Not Enabled Then
+                If MyMsgBox(
+                    "启用后，游戏会从游戏目录的 lang 文件夹读取文本。" & vbCrLf &
+                    "CSV 必须是 UTF-8 编码，并保持完整结构；文件缺失或格式错误可能导致游戏无法启动。" &
+                    vbCrLf & vbCrLf & "确定要启用自定义文本吗？",
+                    "启用自定义文本", "启用", "取消", IsWarn:=True) = 2 Then
+                    Return
+                End If
+            End If
+            WarThunderSetTestLocalization(
+                WarThunderCurrentInstall.InstallPath, Not Enabled)
+            Dim Root As String = WarThunderGetComponentRoot(
+                WarThunderComponentKind.Text)
+            If Not Enabled AndAlso Root <> "" Then
+                IO.Directory.CreateDirectory(Root)
+            End If
+            Hint(
+                If(Enabled,
+                   "已停用自定义文本，重启游戏后生效。",
+                   "已启用自定义文本，重启游戏后生效。"),
+                HintType.Green)
+            UpdateModeUi()
+            RefreshPage()
+        Catch ex As Exception
+            Logger.Error(ex, "切换战争雷霆自定义本地化失败")
+            MyMsgBox(
+                "切换自定义文本失败：" & vbCrLf & ex.GetDisplay(False),
+                "操作失败", IsWarn:=True)
+        End Try
+    End Sub
+
+    Private Sub BtnTextGuide_Click(sender As Object, e As EventArgs) _
+        Handles BtnTextGuide.Click
+        OpenWebsite(
+            "https://wiki.biligame.com/warthunder/%E6%9C%AC%E5%9C%B0%E5%8C%96")
     End Sub
 
     Private Sub RemoveButton_Click(sender As Object, e As EventArgs)

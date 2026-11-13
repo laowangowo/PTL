@@ -16,5 +16,9 @@
                           Type="RadioBox" MinPaddingRight="35"
                           Height="36" VerticalAlignment="Top" Title="音效包"
                           Logo="F1 M1 10 H3 V13 H1 Z M5 6 H7 V17 H5 Z M9 3 H11 V21 H9 Z M13 8 H15 V15 H13 Z M17 5 H19 V18 H17 Z M21 10 H23 V13 H21 Z" />
+        <local:MyListItem x:Name="ItemText" IsScaleAnimationEnabled="False"
+                          Type="RadioBox" MinPaddingRight="35"
+                          Height="36" VerticalAlignment="Top" Title="文本"
+                          Logo="F1 M4 2 H17 L21 6 V22 H4 Z M16 3 V7 H20 M7 10 H18 V12 H7 Z M7 14 H18 V16 H7 Z M7 18 H15 V20 H7 Z" />
     </StackPanel>
 </local:MyPageLeft>

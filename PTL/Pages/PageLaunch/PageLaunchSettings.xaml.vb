@@ -4,6 +4,7 @@ Public Class PageLaunchSettings
         If Not IsLoaded Then Return
         PanBack.ScrollToHome()
         LoadPlayer()
+        LoadLaunchWithPrograms()
         LoadSettings()
     End Sub
 
@@ -67,6 +68,63 @@ Public Class PageLaunchSettings
             LabSettingsPath.Text = "读取 config.blk 失败：" & ex.GetDisplay(False)
             Logger.Error(ex, "读取战争雷霆启动设置失败", LogBehavior.Toast)
         End Try
+    End Sub
+
+    Private Sub LoadLaunchWithPrograms()
+        PanLaunchWithPrograms.Children.Clear()
+        Dim Programs As List(Of String) = WarThunderGetLaunchWithPrograms()
+        If Programs.Count = 0 Then
+            PanLaunchWithPrograms.Children.Add(New TextBlock With {
+                .Text = "尚未添加随雷启动程序。",
+                .FontSize = 11.5,
+                .Foreground = TryCast(
+                    FindResource("ColorBrushGray2"), Media.Brush)
+            })
+            Return
+        End If
+
+        For Each ProgramPath As String In Programs
+            Dim Row As New Border With {
+                .Margin = New Thickness(0, 0, 0, 7),
+                .Padding = New Thickness(11, 7, 8, 7),
+                .CornerRadius = New CornerRadius(5),
+                .BorderThickness = New Thickness(1),
+                .BorderBrush = TryCast(
+                    FindResource("ColorBrushGray1"), Media.Brush),
+                .Background = TryCast(
+                    FindResource("ColorBrushSemiTransparent"), Media.Brush)
+            }
+            Dim Layout As New Grid()
+            Layout.ColumnDefinitions.Add(New ColumnDefinition With {
+                .Width = New GridLength(1, GridUnitType.Star)
+            })
+            Layout.ColumnDefinitions.Add(New ColumnDefinition With {
+                .Width = GridLength.Auto
+            })
+            Layout.Children.Add(New TextBlock With {
+                .Text = ProgramPath,
+                .FontFamily = New Media.FontFamily("Consolas"),
+                .FontSize = 11,
+                .VerticalAlignment = VerticalAlignment.Center,
+                .TextTrimming = TextTrimming.CharacterEllipsis,
+                .ToolTip = ProgramPath,
+                .Foreground = TryCast(
+                    FindResource("ColorBrushGray2"), Media.Brush)
+            })
+            Dim RemoveButton As New MyButton With {
+                .Text = "移除",
+                .Width = 72,
+                .Height = 30,
+                .Margin = New Thickness(10, 0, 0, 0),
+                .ColorType = MyButton.ColorState.Red,
+                .Tag = ProgramPath
+            }
+            AddHandler RemoveButton.Click, AddressOf RemoveLaunchWithProgram_Click
+            Grid.SetColumn(RemoveButton, 1)
+            Layout.Children.Add(RemoveButton)
+            Row.Child = Layout
+            PanLaunchWithPrograms.Children.Add(Row)
+        Next
     End Sub
 
     Private Sub BtnSavePlayer_Click(sender As Object, e As RoutedEventArgs) Handles BtnSavePlayer.Click
@@ -142,6 +200,44 @@ Public Class PageLaunchSettings
     Private Sub BtnChooseFolder_Click(sender As Object, e As RoutedEventArgs) Handles BtnChooseFolder.Click
         FrmLaunchLeft.SelectWarThunderInstallFolder()
         LoadSettings()
+    End Sub
+
+    Private Sub BtnAddLaunchWithProgram_Click(
+        sender As Object, e As RoutedEventArgs) Handles BtnAddLaunchWithProgram.Click
+        Using Dialog As New Windows.Forms.OpenFileDialog()
+            Dialog.Title = "选择要随战争雷霆启动的程序"
+            Dialog.Filter = "可执行文件 (*.exe)|*.exe"
+            Dialog.Multiselect = True
+            Dialog.CheckFileExists = True
+            If Dialog.ShowDialog() <> Windows.Forms.DialogResult.OK Then Return
+            Dim Programs As List(Of String) = WarThunderGetLaunchWithPrograms()
+            For Each ProgramPath As String In Dialog.FileNames
+                If Not Programs.Any(Function(Item)
+                                        Return Item.Equals(
+                                            ProgramPath, StringComparison.OrdinalIgnoreCase)
+                                    End Function) Then
+                    Programs.Add(ProgramPath)
+                End If
+            Next
+            WarThunderSetLaunchWithPrograms(Programs)
+            LoadLaunchWithPrograms()
+            Hint("随雷启动程序已添加。", HintType.Green)
+        End Using
+    End Sub
+
+    Private Sub RemoveLaunchWithProgram_Click(sender As Object, e As RoutedEventArgs)
+        Dim ProgramPath As String =
+            Convert.ToString(CType(sender, FrameworkElement).Tag)
+        If String.IsNullOrWhiteSpace(ProgramPath) Then Return
+        Dim Programs As List(Of String) = WarThunderGetLaunchWithPrograms().
+            Where(Function(Item)
+                      Return Not Item.Equals(
+                          ProgramPath, StringComparison.OrdinalIgnoreCase)
+                  End Function).
+            ToList()
+        WarThunderSetLaunchWithPrograms(Programs)
+        LoadLaunchWithPrograms()
+        Hint("已从随雷启动列表移除。", HintType.Blue)
     End Sub
 
     Private Shared Sub SelectComboByTag(Combo As ComboBox, TagValue As String)

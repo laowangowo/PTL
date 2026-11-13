@@ -9,6 +9,8 @@ Public Class PageWarThunderComponentsLeft
                 ItemCamouflage.SetChecked(True, False, False)
             Case WarThunderComponentKind.Sound
                 ItemSound.SetChecked(True, False, False)
+            Case WarThunderComponentKind.Text
+                ItemText.SetChecked(True, False, False)
             Case Else
                 ItemSights.SetChecked(True, False, False)
         End Select
@@ -16,12 +18,15 @@ Public Class PageWarThunderComponentsLeft
     End Sub
 
     Private Sub PageCheck(sender As FrameworkElement, e As RouteEventArgs) _
-        Handles ItemSights.Check, ItemCamouflage.Check, ItemSound.Check
-        PageKind = If(sender Is ItemSound,
-                      WarThunderComponentKind.Sound,
-                      If(sender Is ItemCamouflage,
-                         WarThunderComponentKind.Camouflage,
-                         WarThunderComponentKind.Sights))
+        Handles ItemSights.Check, ItemCamouflage.Check, ItemSound.Check,
+                ItemText.Check
+        PageKind = If(sender Is ItemText,
+                      WarThunderComponentKind.Text,
+                      If(sender Is ItemSound,
+                         WarThunderComponentKind.Sound,
+                         If(sender Is ItemCamouflage,
+                            WarThunderComponentKind.Camouflage,
+                            WarThunderComponentKind.Sights)))
         FrmWarThunderComponents?.SetMode(PageKind)
     End Sub
 

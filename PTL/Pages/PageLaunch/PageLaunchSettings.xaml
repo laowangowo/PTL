@@ -85,6 +85,19 @@
                 </Grid>
             </local:MyCard>
 
+            <local:MyCard Title="随雷启动" Margin="0,0,0,15">
+                <StackPanel Margin="25,38,23,16">
+                    <TextBlock Text="启动战争雷霆后，会同时启动下面列出的程序。关闭游戏不会自动关闭这些程序。"
+                               FontSize="11.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ColorBrushGray2}" />
+                    <StackPanel x:Name="PanLaunchWithPrograms" Margin="0,12,0,0" />
+                    <local:MyButton x:Name="BtnAddLaunchWithProgram"
+                                    Text="添加程序" Width="110" Height="34"
+                                    Margin="0,10,0,0"
+                                    HorizontalAlignment="Left" />
+                </StackPanel>
+            </local:MyCard>
+
             <local:MyCard Title="画面与声音" Margin="0,15,0,15">
                 <Grid Margin="25,38,23,16">
                     <Grid.ColumnDefinitions>

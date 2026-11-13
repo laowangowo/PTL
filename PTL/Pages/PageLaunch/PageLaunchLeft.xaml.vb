@@ -98,7 +98,10 @@ Public Class PageLaunchLeft
             BtnLaunch.Text = "正在更新游戏"
             BtnLaunch.IsEnabled = False
             BtnVersion.IsEnabled = False
-            LabVersion.Text = "游戏正在后台安装更新"
+            LabVersion.Text = If(
+                String.IsNullOrWhiteSpace(WarThunderUpdateStatus),
+                "游戏正在后台安装更新",
+                WarThunderUpdateStatus)
             Return
         End If
         If WarThunderScanning Then

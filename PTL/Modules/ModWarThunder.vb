@@ -79,6 +79,7 @@ Public Module ModWarThunder
     Private Const SteamAppId As String = "236390"
     Private Const SteamInstallRelativePath As String = "steamapps\common\War Thunder"
     Private Const WarThunderRegistryKey As String = "HKEY_CURRENT_USER\Software\PTL\WarThunderLauncher"
+    Private Const LaunchWithProgramsSetting As String = "WarThunderLaunchWithPrograms"
     Private WarThunderScanLock As New Object
     Private WarThunderUpdateTaskRunning As Boolean = False
     Private WarThunderGameMonitorRunning As Boolean
@@ -412,6 +413,82 @@ Public Module ModWarThunder
     End Function
 
     ''' <summary>
+    ''' 获取随战争雷霆一起启动的程序列表。
+    ''' </summary>
+    Public Function WarThunderGetLaunchWithPrograms() As List(Of String)
+        Dim Result As New List(Of String)
+        Try
+            Dim RawValue As String =
+                Settings.Get(Of String)(LaunchWithProgramsSetting)
+            If String.IsNullOrWhiteSpace(RawValue) Then Return Result
+            Dim Items As JArray = JArray.Parse(RawValue)
+            For Each Item As JToken In Items
+                Dim ProgramPath As String = Item.Value(Of String)()
+                If String.IsNullOrWhiteSpace(ProgramPath) Then Continue For
+                AddLaunchWithProgramPath(Result, ProgramPath)
+            Next
+        Catch ex As Exception
+            Logger.Warn(ex, "读取随雷启动程序列表失败")
+        End Try
+        Return Result
+    End Function
+
+    Public Sub WarThunderSetLaunchWithPrograms(Paths As IEnumerable(Of String))
+        Dim Normalized As New List(Of String)
+        If Paths IsNot Nothing Then
+            For Each ProgramPath As String In Paths
+                AddLaunchWithProgramPath(Normalized, ProgramPath)
+                If Normalized.Count >= 32 Then Exit For
+            Next
+        End If
+        Settings.Set(
+            LaunchWithProgramsSetting,
+            New JArray(Normalized.Cast(Of Object)().ToArray()).ToString(
+                Newtonsoft.Json.Formatting.None))
+    End Sub
+
+    Private Sub AddLaunchWithProgramPath(
+        Items As List(Of String),
+        ProgramPath As String)
+        Try
+            If String.IsNullOrWhiteSpace(ProgramPath) Then Return
+            Dim FullPath As String =
+                Path.GetFullPath(ProgramPath.Trim().Trim(""""c))
+            If Not Path.GetExtension(FullPath).Equals(
+                ".exe", StringComparison.OrdinalIgnoreCase) Then Return
+            If Items.Any(Function(ExistingPath)
+                             Return ExistingPath.Equals(
+                                 FullPath, StringComparison.OrdinalIgnoreCase)
+                         End Function) Then
+                Return
+            End If
+            Items.Add(FullPath)
+        Catch ex As Exception
+            Logger.Warn(ex, $"忽略无效的随雷启动程序路径：{ProgramPath}")
+        End Try
+    End Sub
+
+    Private Sub WarThunderStartLaunchWithPrograms()
+        For Each ProgramPath As String In WarThunderGetLaunchWithPrograms()
+            Try
+                If Not File.Exists(ProgramPath) Then
+                    WarThunderLog($"随雷启动程序不存在，已跳过：{ProgramPath}")
+                    Continue For
+                End If
+                Process.Start(New ProcessStartInfo With {
+                    .FileName = ProgramPath,
+                    .WorkingDirectory = Path.GetDirectoryName(ProgramPath),
+                    .UseShellExecute = True
+                })
+                WarThunderLog($"已启动随雷程序：{ProgramPath}")
+            Catch ex As Exception
+                Logger.Warn(ex, $"启动随雷程序失败：{ProgramPath}")
+                WarThunderLog($"启动随雷程序失败：{ProgramPath} · {ex.Message}")
+            End Try
+        Next
+    End Sub
+
+    ''' <summary>
     ''' 检查更新后启动战争雷霆。确认需要更新时启动官方启动器，无法读取本地版本时仍尝试直接启动。
     ''' </summary>
     Public Function WarThunderStart(ByRef ErrorMessage As String) As Boolean
@@ -513,6 +590,14 @@ Public Module ModWarThunder
             If Remote > Local Then
                 WarThunderUpdateState = WarThunderUpdateCheckState.UpdateRequired
                 WarThunderLog($"检测到游戏更新：{WarThunderLocalVersion} → {WarThunderRemoteVersion}")
+                Return WarThunderUpdateCheckState.UpdateRequired
+            End If
+
+            Dim IntegrityDetail As String = ""
+            If Not WarThunderCheckLocalContent(Install.InstallPath, IntegrityDetail) Then
+                WarThunderUpdateState = WarThunderUpdateCheckState.UpdateRequired
+                WarThunderLog(
+                    $"版本号相同，但本地游戏文件尚未完成更新：{IntegrityDetail}")
                 Return WarThunderUpdateCheckState.UpdateRequired
             End If
 
@@ -624,6 +709,14 @@ Public Module ModWarThunder
             WarThunderUpdateState = WarThunderUpdateCheckState.Unknown
             Return False
         End If
+        Dim ContentStateError As String = ""
+        If Not WarThunderPrepareContentState(
+            Install.InstallPath, ContentStateError) Then
+            Message = "准备游戏完整性状态失败：" & ContentStateError
+            WarThunderUpdateState = WarThunderUpdateCheckState.Unknown
+            WarThunderLog(Message)
+            Return False
+        End If
         If Not WarThunderRestoreSelectedAuthForLaunch(Message) Then Return False
 
         '官方启动器当前同样只传入以下参数；游戏可执行文件可能位于 win64\pc64.zip。
@@ -636,6 +729,7 @@ Public Module ModWarThunder
         })
         Message = $"游戏已是最新版本 {WarThunderLocalVersion}，正在直接启动。"
         WarThunderLog($"已通过 {Path.GetFileName(Install.ExecutablePath)} 启动：{Arguments}")
+        WarThunderStartLaunchWithPrograms()
         WarThunderStartGameProcessWatcher()
         Return True
     End Function
@@ -661,6 +755,7 @@ Public Module ModWarThunder
                 End If
                 Message = "已请求 Steam 启动战争雷霆，游戏更新由 Steam 自动处理。"
                 WarThunderLog($"已通过 Steam 启动战争雷霆：{SteamExecutable} -applaunch {SteamAppId}")
+                WarThunderStartLaunchWithPrograms()
                 WarThunderStartGameProcessWatcher()
                 WarThunderRefreshAllUI()
                 Return True
@@ -677,6 +772,7 @@ Public Module ModWarThunder
             })
             Message = "已请求 Steam 启动战争雷霆，游戏更新由 Steam 自动处理。"
             WarThunderLog($"已通过 Steam 协议启动战争雷霆：{Install.InstallPath}")
+            WarThunderStartLaunchWithPrograms()
             WarThunderStartGameProcessWatcher()
             WarThunderRefreshAllUI()
             Return True

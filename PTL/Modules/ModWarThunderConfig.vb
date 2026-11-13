@@ -75,6 +75,24 @@ Public Module ModWarThunderConfig
         Logger.Info($"已设置循环枪声音效选项：{Enabled}（{ConfigPath}）")
     End Sub
 
+    Public Function WarThunderIsTestLocalizationEnabled(InstallPath As String) As Boolean
+        Dim ConfigPath As String = Path.Combine(InstallPath, "config.blk")
+        If Not File.Exists(ConfigPath) Then Return False
+        Dim Text As String = File.ReadAllText(ConfigPath)
+        Return WarThunderReadBlkBool(
+            Text, "debug", "testLocalization", False)
+    End Function
+
+    Public Sub WarThunderSetTestLocalization(InstallPath As String, Enabled As Boolean)
+        Dim ConfigPath As String = Path.Combine(InstallPath, "config.blk")
+        If Not File.Exists(ConfigPath) Then Throw New FileNotFoundException("未找到战争雷霆配置文件。", ConfigPath)
+        Dim Text As String = File.ReadAllText(ConfigPath)
+        Text = WarThunderWriteBlkKey(
+            Text, "debug", "testLocalization", "b", Enabled, False)
+        WarThunderWriteConfig(ConfigPath, Text)
+        Logger.Info($"已{(If(Enabled, "启用", "停用"))}战争雷霆自定义本地化：{ConfigPath}")
+    End Sub
+
     Private Sub WarThunderWriteConfig(ConfigPath As String, Text As String)
         Dim TempPath As String = ConfigPath & ".ptl.tmp"
         Dim BackupPath As String = ConfigPath & ".ptl.bak"

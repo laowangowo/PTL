@@ -6,6 +6,8 @@ Imports System.Net.Http
 Imports System.Net.Sockets
 Imports System.Security.Cryptography
 Imports System.Text
+Imports System.Text.RegularExpressions
+Imports System.Collections.Concurrent
 Imports System.Threading.Tasks
 Imports MonoTorrent
 Imports MonoTorrent.BEncoding
@@ -35,6 +37,38 @@ Friend NotInheritable Class WarThunderTargetManifest
     Public Property Snapshot As WarThunderYupSnapshot = Nothing
 End Class
 
+Friend NotInheritable Class WarThunderHttpFileTask
+    Public Property RelativePath As String = ""
+    Public Property FinalPath As String = ""
+    Public Property TempPath As String = ""
+    Public Property Entry As WarThunderYupFile = Nothing
+    Public Property Sources As New List(Of String)
+    Public Property Chunks As New List(Of WarThunderHttpChunk)
+    Public Property RemainingChunks As Integer
+    Public Property IsWholeFile As Boolean
+End Class
+
+Friend NotInheritable Class WarThunderHttpChunk
+    Public Property FileTask As WarThunderHttpFileTask = Nothing
+    Public Property Index As Integer
+    Public Property StartByte As Long
+    Public Property EndByte As Long
+    Public Property PartPath As String = ""
+
+    Public ReadOnly Property Length As Long
+        Get
+            Return Math.Max(0, EndByte - StartByte + 1)
+        End Get
+    End Property
+End Class
+
+Friend NotInheritable Class WarThunderHttpDownloadContext
+    Public BytesRead As Long
+    Public CompletedFiles As Integer
+    Public ReadOnly Property SuccessfulPaths As New ConcurrentBag(Of String)
+    Public ReadOnly Property Cancellation As New Threading.CancellationTokenSource()
+End Class
+
 ''' <summary>
 ''' PTL 内置的战争雷霆 YUP/P2P 更新实现。
 ''' </summary>
@@ -45,8 +79,16 @@ Friend Module ModWarThunderSelfUpdate
     Private Const DefaultTrackerUrl As String = "udp://yuptracker.gaijinent.com:27022/announce"
     Private Const BackupTrackerUrl As String = "udp://yuptracker-sa.gaijinent.com:27029/announce"
     Private Const CdnThreadLimit As Integer = 128
-    Private Const CdnPrimarySeedLimit As Integer = 8
+    Private Const CdnPrimarySeedLimit As Integer = 6
+    Private Const HttpWorkerLimit As Integer = 48
+    Private Const HttpMaxChunksPerLargeFile As Integer = 16
+    Private Const HttpLargeFileThreshold As Long = 16L * 1024 * 1024
+    Private Const HttpChunkReadBuffer As Integer = 256 * 1024
+    Private Const HttpChunkIdleTimeoutSeconds As Integer = 45
+    Private Const HttpSlowSourceWindowSeconds As Integer = 15
+    Private Const HttpSlowSourceMinimumBytesPerSecond As Long = 64L * 1024
     Private WarThunderSelfUpdateDownloadRoot As String = ""
+    Private WarThunderLastStateUiRefresh As Date = Date.MinValue
 
     Public Function WarThunderRunSelfUpdate(
         Install As WarThunderInstallation,
@@ -55,11 +97,12 @@ Friend Module ModWarThunderSelfUpdate
         If Install Is Nothing OrElse Not Directory.Exists(Install.InstallPath) Then
             Throw New DirectoryNotFoundException("战争雷霆安装目录不存在。")
         End If
+        WarThunderStopOfficialUpdateProcesses(Install.InstallPath, Loader)
         If WarThunderGetGameProcessIds().Any() Then
             Throw New InvalidOperationException("请先关闭战争雷霆，再开始更新。")
         End If
 
-        WarThunderSetSelfUpdateState(Loader, 0.01, "正在获取更新清单", 0, 0, -1)
+        WarThunderSetSelfUpdateState(Loader, 0.03, "正在获取更新清单", 0, 0, -1)
         Dim Tag As String = WarThunderGetSelfUpdateTag(Install.InstallPath)
         Dim Target = WarThunderDownloadTargetManifest(Install.InstallPath, Tag, RemoteVersion)
         If Target Is Nothing OrElse Target.Snapshot Is Nothing Then
@@ -78,10 +121,13 @@ Friend Module ModWarThunderSelfUpdate
 
         WarThunderSetSelfUpdateState(Loader, 0.05, "正在检查游戏文件", 0, 0, -1)
         Dim ManifestPath As String = Path.Combine(Install.InstallPath, "warthunder.yup")
-        Dim OldManifest = WarThunderYupSnapshot.TryRead(ManifestPath)
-        If OldManifest Is Nothing Then
+        Dim CurrentManifest = WarThunderYupSnapshot.TryRead(ManifestPath)
+        If CurrentManifest Is Nothing Then
             Throw New InvalidDataException("无法读取当前战争雷霆的 YUP 清单。")
         End If
+        Dim OldManifest As WarThunderYupSnapshot =
+            WarThunderSelectSelfUpdateBaseline(
+                Install.InstallPath, Target.Snapshot, CurrentManifest)
         Dim Plan As WarThunderSelfUpdatePlan =
             WarThunderCreateSelfUpdatePlan(Install.InstallPath, OldManifest, Target.Snapshot)
         WarThunderEnsureSelfUpdateSpace(Install.InstallPath, Plan)
@@ -100,6 +146,23 @@ Friend Module ModWarThunderSelfUpdate
         Dim InstalledFiles As Integer =
             WarThunderInstallSelfUpdateFiles(Install.InstallPath, Target.Snapshot, Plan, Loader)
 
+        Dim VerificationPlan As WarThunderSelfUpdatePlan =
+            WarThunderCreateSelfUpdatePlan(
+                Install.InstallPath, OldManifest, Target.Snapshot)
+        If VerificationPlan.RequiredFiles.Count > 0 Then
+            Dim Samples As String = String.Join(
+                "、", VerificationPlan.RequiredFiles.Keys.Take(5))
+            Throw New InvalidDataException(
+                $"更新完成后仍有 {VerificationPlan.RequiredFiles.Count} 个文件" &
+                $"未通过完整性校验：{Samples}")
+        End If
+        Dim ContentStateError As String = ""
+        If Not WarThunderPrepareContentState(
+            Install.InstallPath, ContentStateError, True) Then
+            Throw New InvalidDataException(
+                "无法生成游戏完整性状态：" & ContentStateError)
+        End If
+
         WarThunderSetSelfUpdateState(Loader, 0.98, "正在更新游戏清单", 0, Plan.TotalBytes, 0)
         WarThunderApplySelfUpdateManifest(Install.InstallPath, Target.Snapshot, EffectiveVersion)
         WarThunderCleanupSelfUpdateCache(Target.FilePath)
@@ -111,6 +174,83 @@ Friend Module ModWarThunderSelfUpdate
             .UpdatedFiles = Math.Max(Plan.RequiredFiles.Count, InstalledFiles),
             .DownloadedBytes = DownloadedBytes
         }
+    End Function
+
+    Private Sub WarThunderStopOfficialUpdateProcesses(
+        InstallPath As String,
+        Loader As LoaderBase)
+        WarThunderSetSelfUpdateState(
+            Loader, 0.01, "正在关闭官方更新组件", 0, 0, -1)
+        Dim InstallRoot As String =
+            Path.GetFullPath(InstallPath).TrimEnd("\"c)
+        Dim CurrentPid As Integer = Process.GetCurrentProcess().Id
+        Dim Failures As New List(Of String)
+        For Each ProcessName As String In {
+            "launcher",
+            "gjagent",
+            "gaijin_downloader",
+            "gaijin_updater",
+            "gaijin_updater_agent"
+        }
+            For Each RunningProcess As Process In
+                Process.GetProcessesByName(ProcessName)
+                If RunningProcess.Id = CurrentPid Then Continue For
+                Try
+                    If Not WarThunderShouldStopOfficialProcess(
+                        RunningProcess, ProcessName, InstallRoot) Then
+                        Continue For
+                    End If
+                    WarThunderLog(
+                        $"正在关闭官方更新进程：{ProcessName}.exe (PID {RunningProcess.Id})")
+                    RunningProcess.Kill()
+                    If Not RunningProcess.WaitForExit(5000) Then
+                        Failures.Add($"{ProcessName}.exe (PID {RunningProcess.Id})")
+                    End If
+                Catch ex As Exception
+                    Logger.Warn(
+                        ex,
+                        $"关闭官方更新进程失败：{ProcessName}.exe (PID {RunningProcess.Id})")
+                    Failures.Add($"{ProcessName}.exe (PID {RunningProcess.Id})")
+                Finally
+                    RunningProcess.Dispose()
+                End Try
+            Next
+        Next
+        If Failures.Count > 0 Then
+            Throw New InvalidOperationException(
+                "无法关闭官方更新进程，请手动结束以下进程后重试：" &
+                String.Join("、", Failures))
+        End If
+    End Sub
+
+    Private Function WarThunderShouldStopOfficialProcess(
+        RunningProcess As Process,
+        ProcessName As String,
+        InstallRoot As String) As Boolean
+        If ProcessName.Equals("launcher", StringComparison.OrdinalIgnoreCase) Then
+            Try
+                Return Path.GetFullPath(
+                    RunningProcess.MainModule.FileName).Equals(
+                        Path.Combine(InstallRoot, "launcher.exe"),
+                        StringComparison.OrdinalIgnoreCase)
+            Catch
+                '无法读取路径时仍尝试结束 launcher.exe；若权限不足会明确报错。
+                Return True
+            End Try
+        End If
+        If ProcessName.Equals("gjagent", StringComparison.OrdinalIgnoreCase) Then
+            Return True
+        End If
+        Try
+            Dim FilePath As String =
+                Path.GetFullPath(RunningProcess.MainModule.FileName)
+            Return FilePath.StartsWith(
+                InstallRoot & "\", StringComparison.OrdinalIgnoreCase) OrElse
+                FilePath.IndexOf(
+                    "\Gaijin\", StringComparison.OrdinalIgnoreCase) >= 0
+        Catch
+            Return True
+        End Try
     End Function
 
     Private Function WarThunderGetSelfUpdateTag(InstallPath As String) As String
@@ -177,6 +317,7 @@ Friend Module ModWarThunderSelfUpdate
 
             For Each Candidate In Candidates.
                 OrderByDescending(Function(Item) Item.Key).
+                ThenBy(Function(Item) WarThunderGetCdnSeedPriority(Item.Value)).
                 Select(Function(Item) Item.Value).
                 GroupBy(Function(Item) Item.AbsoluteUri).
                 Select(Function(Group) Group.First()).
@@ -187,6 +328,15 @@ Friend Module ModWarThunderSelfUpdate
             Logger.Warn(ex, "获取战争雷霆 CDN Web Seed 失败")
         End Try
         Return Result
+    End Function
+
+    Private Function WarThunderGetCdnSeedPriority(Seed As Uri) As Integer
+        Dim Host As String = Seed.Host.ToLowerInvariant()
+        If Host.Contains("gcore.cdn.gaijin.net") Then Return 0
+        If Host.Contains("seed-gc-") Then Return 1
+        If Host.Contains("akamai.cdn.gaijin.net") Then Return 1
+        If Host.Contains("seed-sv-us-") Then Return 2
+        Return 2
     End Function
 
     Private Function WarThunderSelfUpdateCacheBase(InstallPath As String) As String
@@ -285,6 +435,82 @@ Friend Module ModWarThunderSelfUpdate
         }
     End Function
 
+    Private Function WarThunderSelectSelfUpdateBaseline(
+        InstallPath As String,
+        TargetManifest As WarThunderYupSnapshot,
+        CurrentManifest As WarThunderYupSnapshot) As WarThunderYupSnapshot
+        If CurrentManifest Is Nothing Then Return Nothing
+        Dim TargetVersion As Version = Nothing
+        If TargetManifest Is Nothing OrElse
+           Not Version.TryParse(
+               If(String.IsNullOrWhiteSpace(TargetManifest.LocalVersion),
+                  TargetManifest.Version, TargetManifest.LocalVersion),
+               TargetVersion) Then
+            Return CurrentManifest
+        End If
+
+        Dim BestManifest As WarThunderYupSnapshot = CurrentManifest
+        Dim BestVersion As Version = Nothing
+        Version.TryParse(
+            If(String.IsNullOrWhiteSpace(CurrentManifest.LocalVersion),
+               CurrentManifest.Version, CurrentManifest.LocalVersion),
+            BestVersion)
+        Dim BestWriteTime As Date = Date.MinValue
+        Try
+            Dim CurrentPath As String =
+                Path.Combine(InstallPath, "warthunder.yup")
+            If File.Exists(CurrentPath) Then
+                BestWriteTime = File.GetLastWriteTimeUtc(CurrentPath)
+            End If
+        Catch
+        End Try
+
+        Try
+            For Each CandidatePath As String In Directory.GetFiles(
+                InstallPath, "warthunder_old.yup*")
+                Dim Candidate As WarThunderYupSnapshot =
+                    WarThunderYupSnapshot.TryRead(CandidatePath)
+                If Candidate Is Nothing Then Continue For
+                Dim CandidateVersion As Version = Nothing
+                If Not Version.TryParse(
+                    If(String.IsNullOrWhiteSpace(Candidate.LocalVersion),
+                       Candidate.Version, Candidate.LocalVersion),
+                    CandidateVersion) OrElse
+                   CandidateVersion >= TargetVersion Then
+                    Continue For
+                End If
+
+                Dim CandidateWriteTime As Date =
+                    File.GetLastWriteTimeUtc(CandidatePath)
+                Dim UseCandidate As Boolean =
+                    BestVersion Is Nothing OrElse
+                    BestVersion >= TargetVersion OrElse
+                    CandidateVersion > BestVersion OrElse
+                    (CandidateVersion = BestVersion AndAlso
+                     CandidateWriteTime > BestWriteTime)
+                If UseCandidate Then
+                    BestManifest = Candidate
+                    BestVersion = CandidateVersion
+                    BestWriteTime = CandidateWriteTime
+                End If
+            Next
+        Catch ex As Exception
+            Logger.Warn(ex, "扫描战争雷霆历史 YUP 清单失败")
+        End Try
+
+        Dim FinalVersion As String =
+            If(String.IsNullOrWhiteSpace(BestManifest.LocalVersion),
+               BestManifest.Version, BestManifest.LocalVersion)
+        If Not FinalVersion.Equals(
+            If(String.IsNullOrWhiteSpace(CurrentManifest.LocalVersion),
+               CurrentManifest.Version, CurrentManifest.LocalVersion),
+            StringComparison.OrdinalIgnoreCase) Then
+            Logger.Info(
+                $"战争雷霆使用历史清单作为更新基线：{FinalVersion}")
+        End If
+        Return BestManifest
+    End Function
+
     Private Function WarThunderCreateSelfUpdatePlan(
         InstallPath As String,
         OldManifest As WarThunderYupSnapshot,
@@ -292,6 +518,9 @@ Friend Module ModWarThunderSelfUpdate
         Dim Result As New WarThunderSelfUpdatePlan
         For Each Entry In NewManifest.Files.Values
             If Entry.IsPatch Then Continue For
+            If Not WarThunderShouldProcessSelfUpdateEntry(Entry.RelativePath) Then
+                Continue For
+            End If
 
             Dim OldEntry As WarThunderYupFile = Nothing
             Dim ExistedBefore As Boolean = OldManifest.Files.TryGetValue(Entry.RelativePath, OldEntry)
@@ -317,15 +546,200 @@ Friend Module ModWarThunderSelfUpdate
                 Entry.ZipEntries.Count > 0 AndAlso
                 Not WarThunderZipTargetsExist(InstallPath, Entry)
             Dim AlreadyTarget As Boolean =
-                LocalExists AndAlso LengthMatches AndAlso
-                WarThunderLocalTimeMatchesYup(LocalPath, Entry)
+                WarThunderSelfUpdateLocalFileMatches(LocalPath, Entry)
 
-            If (ManifestChanged OrElse Not LocalExists OrElse Not LengthMatches OrElse ZipNeedsRepair) AndAlso
-               Not AlreadyTarget Then
+            Dim NeedsDownload As Boolean
+            If ManifestChanged Then
+                NeedsDownload =
+                    Not WarThunderSelfUpdateLocalFileMatchesSha1(LocalPath, Entry)
+            Else
+                NeedsDownload =
+                    (Not LocalExists OrElse Not LengthMatches) AndAlso
+                    Not AlreadyTarget
+            End If
+            If NeedsDownload OrElse ZipNeedsRepair Then
                 Result.RequiredFiles(Entry.RelativePath) = Entry
             End If
         Next
         Return Result
+    End Function
+
+    Friend Function WarThunderCheckLocalContent(
+        InstallPath As String,
+        ByRef Detail As String) As Boolean
+        Detail = ""
+        Dim ManifestPath As String = Path.Combine(InstallPath, "warthunder.yup")
+        Dim Manifest As WarThunderYupSnapshot =
+            WarThunderYupSnapshot.TryRead(ManifestPath)
+        If Manifest Is Nothing Then
+            Detail = "无法读取本地战争雷霆 YUP 清单。"
+            Return False
+        End If
+
+        Dim Baseline As WarThunderYupSnapshot =
+            WarThunderSelectSelfUpdateBaseline(
+                InstallPath, Manifest, Manifest)
+        Dim Plan As WarThunderSelfUpdatePlan =
+            WarThunderCreateSelfUpdatePlan(InstallPath, Baseline, Manifest)
+        If Plan.RequiredFiles.Count = 0 Then Return True
+
+        Dim Samples As List(Of String) = Plan.RequiredFiles.Keys.
+            OrderBy(Function(PathText) PathText, StringComparer.OrdinalIgnoreCase).
+            Take(5).ToList()
+        Detail =
+            $"检测到 {Plan.RequiredFiles.Count} 个游戏文件缺失、大小或内容不符：" &
+            String.Join("、", Samples)
+        If Plan.RequiredFiles.Count > Samples.Count Then Detail &= " 等"
+        Logger.Info($"战争雷霆本地文件完整性检查未通过：{Detail}")
+        Return False
+    End Function
+
+    ''' <summary>
+    ''' 按官方启动器的规则生成 content/warthunder.blk 的包状态。
+    ''' </summary>
+    Friend Function WarThunderPrepareContentState(
+        InstallPath As String,
+        ByRef Detail As String,
+        Optional Force As Boolean = False) As Boolean
+        Detail = ""
+        Try
+            Dim InstallRoot As String =
+                Path.GetFullPath(InstallPath).TrimEnd("\"c)
+            Dim BlkPath As String =
+                Path.Combine(InstallRoot, "content\warthunder.blk")
+            If Not File.Exists(BlkPath) Then
+                Detail = "找不到 content\warthunder.blk。"
+                Return False
+            End If
+
+            Dim Lines As String() = File.ReadAllLines(BlkPath, Encoding.UTF8)
+            If Not Force AndAlso
+               Not Lines.Any(Function(LineText)
+                                 Return LineText.Contains("status:i=0") OrElse
+                                        LineText.Contains("status:i=3")
+                             End Function) Then
+                Return True
+            End If
+
+            Dim Output As New List(Of String)(Lines.Length)
+            Dim PackSelection As New Dictionary(Of String, Boolean)(
+                StringComparer.OrdinalIgnoreCase)
+            Dim Status1 As Integer = 0
+            Dim Status2 As Integer = 0
+            Dim Index As Integer = 0
+            While Index < Lines.Length
+                If Not Lines(Index).Trim().Equals(
+                    "file{", StringComparison.Ordinal) Then
+                    Output.Add(Lines(Index))
+                    Index += 1
+                    Continue While
+                End If
+
+                Dim BlockStart As Integer = Index
+                Dim Depth As Integer = 0
+                Do While Index < Lines.Length
+                    Depth += Lines(Index).Count(Function(Character) Character = "{"c)
+                    Depth -= Lines(Index).Count(Function(Character) Character = "}"c)
+                    Index += 1
+                    If Depth = 0 Then Exit Do
+                Loop
+                If Depth <> 0 Then
+                    Detail = "content\warthunder.blk 的文件块不完整。"
+                    Return False
+                End If
+
+                Dim ItemPath As String = ""
+                Dim ItemSize As Long = -1
+                Dim PackTags As New List(Of String)
+                For LineIndex As Integer = BlockStart To Index - 1
+                    Dim LineText As String = Lines(LineIndex)
+                    Dim PathMatch As Match = Regex.Match(
+                        LineText, "^\s*path:t=""(.*)""\s*$")
+                    If PathMatch.Success Then
+                        ItemPath = PathMatch.Groups(1).Value.Replace("\", "/")
+                    End If
+                    Dim SizeMatch As Match = Regex.Match(
+                        LineText, "^\s*size:i64=(\d+)\s*$")
+                    If SizeMatch.Success Then
+                        Long.TryParse(SizeMatch.Groups(1).Value, ItemSize)
+                    End If
+                    Dim TagMatch As Match = Regex.Match(
+                        LineText, "^\s*tag:t=""(pack_[^""]+)""\s*$")
+                    If TagMatch.Success Then
+                        PackTags.Add(TagMatch.Groups(1).Value)
+                    End If
+                Next
+
+                Dim ItemSelected As Boolean = PackTags.Count = 0
+                If Not ItemSelected Then
+                    For Each PackTag As String In PackTags
+                        Dim IsSelected As Boolean
+                        If Not PackSelection.TryGetValue(
+                            PackTag, IsSelected) Then
+                            IsSelected =
+                                WarThunderContentPackIsSelected(
+                                    InstallRoot, PackTag)
+                            PackSelection(PackTag) = IsSelected
+                        End If
+                        If IsSelected Then
+                            ItemSelected = True
+                            Exit For
+                        End If
+                    Next
+                End If
+
+                Dim ItemStatus As Integer = 2
+                If ItemSelected AndAlso ItemPath <> "" AndAlso ItemSize >= 0 Then
+                    Dim FullPath As String =
+                        WarThunderSafeInstallPath(InstallRoot, ItemPath)
+                    If FullPath <> "" AndAlso
+                       File.Exists(FullPath) AndAlso
+                       New FileInfo(FullPath).Length = ItemSize Then
+                        ItemStatus = 1
+                    End If
+                End If
+                If ItemStatus = 1 Then Status1 += 1 Else Status2 += 1
+
+                For LineIndex As Integer = BlockStart To Index - 1
+                    Dim StatusMatch As Match = Regex.Match(
+                        Lines(LineIndex), "^(\s*status:i=)(\d+)(\s*)$")
+                    If StatusMatch.Success Then
+                        Output.Add(
+                            StatusMatch.Groups(1).Value &
+                            ItemStatus.ToString() &
+                            StatusMatch.Groups(3).Value)
+                    Else
+                        Output.Add(Lines(LineIndex))
+                    End If
+                Next
+            End While
+
+            Dim TempPath As String = BlkPath & ".ptl-new"
+            FileUtils.Delete(TempPath)
+            File.WriteAllLines(TempPath, Output, New UTF8Encoding(False))
+            WarThunderAtomicReplace(TempPath, BlkPath)
+            Detail = $"完整文件 {Status1}，未安装可选文件 {Status2}。"
+            Logger.Info("战争雷霆完整性状态已生成：" & Detail)
+            Return True
+        Catch ex As Exception
+            Detail = ex.GetDisplay(False)
+            Logger.Warn(ex, "生成战争雷霆完整性状态失败")
+            Return False
+        End Try
+    End Function
+
+    Private Function WarThunderContentPackIsSelected(
+        InstallRoot As String,
+        PackTag As String) As Boolean
+        If Not PackTag.StartsWith(
+            "pack_", StringComparison.OrdinalIgnoreCase) Then Return False
+        Dim Suffix As String = PackTag.Substring("pack_".Length)
+        If File.Exists(
+            Path.Combine(InstallRoot, "content", Suffix & ".rq2")) Then
+            Return True
+        End If
+        Return File.Exists(
+            Path.Combine(InstallRoot, "content", "pkg_" & Suffix & ".rq2"))
     End Function
 
     Private Function WarThunderDownloadSelfUpdateFiles(
@@ -343,6 +757,15 @@ Friend Module ModWarThunderSelfUpdate
         Dim WebSeeds = WarThunderGetSelfUpdateWebSeeds(
             WarThunderGetSelfUpdateTag(Install.InstallPath), Manifest.Version)
         Dim Completed As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        For Each Pair In Plan.RequiredFiles
+            Dim LocalPath As String =
+                WarThunderSafeInstallPath(Install.InstallPath, Pair.Key)
+            If LocalPath <> "" AndAlso
+               WarThunderSelfUpdateLocalFileCanBeReused(LocalPath, Pair.Value) Then
+                '只需重新展开已有 ZIP 时，不重复下载原压缩包。
+                Completed.Add(Pair.Key)
+            End If
+        Next
         Dim DownloadedBytes As Long = 0
         Dim CompletedBytesBeforePass As Long = 0
         Dim Remaining As New WarThunderSelfUpdatePlan
@@ -418,12 +841,15 @@ Friend Module ModWarThunderSelfUpdate
         Dim PrimarySeedCount As Integer =
             Math.Min(CdnPrimarySeedLimit, RankedWebSeeds.Count)
         WarThunderLog(
-            $"战争雷霆更新将均衡使用前 {PrimarySeedCount} 个高优先级 CDN 端点。")
+            $"下载引擎将均衡使用前 {PrimarySeedCount} 个高优先级 CDN 端点，" &
+            $"并发上限 {HttpWorkerLimit}：" &
+            String.Join(", ", RankedWebSeeds.Take(PrimarySeedCount).
+                Select(Function(Seed) Seed.Host)))
 
-        Dim Files As New List(Of NetFile)
-        Dim FileKeys As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
-        Dim FileSizes As New Dictionary(Of String, Long)(StringComparer.OrdinalIgnoreCase)
+        Dim FileTasks As New List(Of WarThunderHttpFileTask)
+        Dim Chunks As New List(Of WarThunderHttpChunk)
         For Each Pair In Plan.RequiredFiles
+            If Completed.Contains(Pair.Key) Then Continue For
             Dim FinalPath As String = WarThunderSafeInstallPath(
                 Install.InstallPath, Pair.Key)
             If FinalPath = "" Then Continue For
@@ -439,103 +865,350 @@ Friend Module ModWarThunderSelfUpdate
             Dim Sources = WarThunderCreateCdnFileSources(
                 RankedWebSeeds, TorrentName, Pair.Key, PrimarySeedCount)
             If Sources.Count = 0 Then Continue For
-            Dim Checker As New FileChecker With {
-                .ActualSize = Pair.Value.Length,
-                .Hash = WarThunderSha1Hex(Pair.Value.Sha1)
+
+            Dim FileTask As New WarThunderHttpFileTask With {
+                .RelativePath = Pair.Key,
+                .FinalPath = FinalPath,
+                .TempPath = LocalPath,
+                .Entry = Pair.Value,
+                .Sources = Sources
             }
-            Files.Add(New NetFile(Sources, LocalPath, Checker) With {
-                .DownloadTempDirectory = Path.Combine(CacheRoot, ".parts"),
-                .PostProcess = Sub(TempPath)
-                                   WarThunderAtomicReplace(TempPath, FinalPath)
-                                   WarThunderSetFileTimestamp(
-                                       FinalPath, Pair.Value.ModifiedTime)
-                               End Sub
-            })
-            FileKeys(LocalPath) = Pair.Key
-            FileSizes(LocalPath) = Pair.Value.Length
+            FileTask.IsWholeFile = Pair.Value.Length <= HttpLargeFileThreshold
+            Dim ChunkCount As Integer = 1
+            If Not FileTask.IsWholeFile Then
+                Dim DesiredChunks As Long =
+                    CLng(Math.Ceiling(Pair.Value.Length / (4.0 * 1024 * 1024)))
+                ChunkCount = CInt(Math.Max(2L, Math.Min(
+                    CLng(HttpMaxChunksPerLargeFile), DesiredChunks)))
+            End If
+            Dim ChunkSize As Long = CLng(Math.Ceiling(
+                Pair.Value.Length / CDbl(ChunkCount)))
+            For ChunkIndex As Integer = 0 To ChunkCount - 1
+                Dim StartByte As Long = CLng(ChunkIndex) * ChunkSize
+                If StartByte >= Pair.Value.Length Then Exit For
+                Dim EndByte As Long = Math.Min(
+                    Pair.Value.Length - 1, StartByte + ChunkSize - 1)
+                Dim PartPath As String =
+                    If(FileTask.IsWholeFile, FileTask.TempPath,
+                       FileTask.TempPath & ".part" & ChunkIndex)
+                Dim Chunk As New WarThunderHttpChunk With {
+                    .FileTask = FileTask,
+                    .Index = ChunkIndex,
+                    .StartByte = StartByte,
+                    .EndByte = EndByte,
+                    .PartPath = PartPath
+                }
+                FileTask.Chunks.Add(Chunk)
+                Chunks.Add(Chunk)
+            Next
+            FileTask.RemainingChunks = FileTask.Chunks.Count
+            WarThunderDeleteHttpFileTaskArtifacts(FileTask)
+            FileTasks.Add(FileTask)
         Next
-        If Files.Count = 0 Then
+        If Chunks.Count = 0 Then
             Return Math.Max(
                 0,
                 WarThunderCompletedFileBytes(TotalPlan, Completed) -
                 CompletedBytesAtStart)
         End If
+        WarThunderLog(
+            $"HTTP 任务已建立：{FileTasks.Count} 个文件，{Chunks.Count} 个下载分段，" &
+            $"总计 {StringUtils.FormatByteSize(Plan.TotalBytes)}。")
 
-        Dim CdnLoader As New LoaderDownload(
-            $"通过 CDN 下载战争雷霆更新（{Files.Count} 个文件）", Files) With {
-            .Show = False
-        }
-        Dim PreviousThreadLimitBoost As Integer = ModNet.NetTaskThreadLimitBoost
-        ModNet.NetTaskThreadLimitBoost = Math.Max(
-            PreviousThreadLimitBoost, CdnThreadLimit)
-        Try
-            CdnLoader.Start()
-            Do While CdnLoader.State = LoadState.Loading
+        Dim Queue As New ConcurrentQueue(Of WarThunderHttpChunk)(Chunks)
+        Dim Context As New WarThunderHttpDownloadContext
+        Using Handler As New HttpClientHandler()
+            Handler.UseProxy = False
+            Handler.UseCookies = False
+            Handler.AutomaticDecompression = Net.DecompressionMethods.None
+            Handler.MaxConnectionsPerServer = HttpWorkerLimit
+            Using Client As New HttpClient(Handler)
+                Client.Timeout = TimeSpan.FromMinutes(30)
+                Client.DefaultRequestHeaders.UserAgent.ParseAdd("PTL/" & PtlVersion)
+                Client.DefaultRequestHeaders.ExpectContinue = False
+
+                Dim WorkerTasks As New List(Of Task)
+                For WorkerIndex As Integer = 0 To HttpWorkerLimit - 1
+                    WorkerTasks.Add(Task.Factory.StartNew(
+                        Sub()
+                            WarThunderHttpDownloadWorker(
+                                Context, Queue, Client)
+                        End Sub,
+                        Threading.CancellationToken.None,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default))
+                Next
+                Dim AllWorkers As Task = Task.WhenAll(WorkerTasks)
+                Dim LastBytes As Long = 0
+                Dim LastTime As Date = Date.UtcNow
+                Dim SmoothedSpeed As Double = 0
+                Do While Not AllWorkers.Wait(250)
+                    If Loader.IsCanceled Then Context.Cancellation.Cancel()
+                    Dim CurrentBytes As Long = Interlocked.Read(Context.BytesRead)
+                    Dim Now As Date = Date.UtcNow
+                    Dim Seconds As Double =
+                        Math.Max(0.001, (Now - LastTime).TotalSeconds)
+                    Dim InstantSpeed As Double =
+                        Math.Max(0, (CurrentBytes - LastBytes) / Seconds)
+                    SmoothedSpeed = If(
+                        SmoothedSpeed <= 0, InstantSpeed,
+                        SmoothedSpeed * 0.72 + InstantSpeed * 0.28)
+                    LastBytes = CurrentBytes
+                    LastTime = Now
+
+                    Dim OverallDownloaded As Long = Math.Min(
+                        TotalPlan.TotalBytes,
+                        CompletedBytesAtStart + CurrentBytes)
+                    Dim OverallProgress As Double = If(
+                        TotalPlan.TotalBytes > 0,
+                        Math.Max(0, Math.Min(
+                            1, OverallDownloaded / TotalPlan.TotalBytes)),
+                        1)
+                    Dim RemainingFiles As Integer = Math.Max(
+                        0, FileTasks.Count - Context.CompletedFiles)
+                    WarThunderSetSelfUpdateState(
+                        Loader,
+                        0.1 + OverallProgress * 0.8,
+                        "正在下载游戏更新",
+                        CLng(SmoothedSpeed),
+                        TotalPlan.TotalBytes,
+                        RemainingFiles,
+                        OverallDownloaded)
+                Loop
+                Context.Cancellation.Cancel()
+                AllWorkers.GetAwaiter().GetResult()
                 If Loader.IsCanceled Then
-                    CdnLoader.Cancel()
                     Throw New OperationCanceledException()
                 End If
-                Dim PassCompletedBytes As Long = 0
-                For Each File In Files
-                    Dim FileLength As Long = 0
-                    If File.State = NetState.Finished AndAlso
-                       FileSizes.TryGetValue(File.LocalPath, FileLength) Then
-                        PassCompletedBytes += FileLength
-                    End If
-                Next
-                Dim OverallDownloaded As Long = Math.Min(
-                    TotalPlan.TotalBytes,
-                    CompletedBytesBeforePass + PassCompletedBytes)
-                Dim OverallProgress As Double = If(
-                    TotalPlan.TotalBytes > 0,
-                    Math.Max(0, Math.Min(
-                        1, OverallDownloaded / TotalPlan.TotalBytes)),
-                    1)
-                WarThunderSetSelfUpdateState(
-                    Loader,
-                    0.1 + OverallProgress * 0.8,
-                    "正在通过多路 CDN 下载游戏更新",
-                    CdnLoader.DownloadSpeed,
-                    TotalPlan.TotalBytes,
-                    CdnLoader.FilesRemaining,
-                    OverallDownloaded)
-                Thread.Sleep(100)
-            Loop
-        Finally
-            ModNet.NetTaskThreadLimitBoost = PreviousThreadLimitBoost
-        End Try
+            End Using
+        End Using
 
-        For Each File In Files
-            Dim RelativePath As String = Nothing
-            If File.State = NetState.Finished AndAlso
-               FileKeys.TryGetValue(File.LocalPath, RelativePath) Then
-                Completed.Add(RelativePath)
-            End If
+        For Each RelativePath As String In Context.SuccessfulPaths
+            Completed.Add(RelativePath)
         Next
-        If CdnLoader.State = LoadState.Failed Then
-            Dim CdnErrorText As String =
-                If(CdnLoader.Error Is Nothing, "", CdnLoader.Error.ToString())
-            If CdnErrorText.Contains("磁盘空间不足") OrElse
-               CdnErrorText.IndexOf(
-                   "not enough space on the disk",
-                   StringComparison.OrdinalIgnoreCase) >= 0 Then
-                Throw New IOException(
-                    $"游戏目录所在磁盘空间不足。临时下载目录：{CacheRoot}。请清理该磁盘后重试。")
-            End If
-            Dim RemainingInPass As Integer = 0
-            For Each RelativePath In Plan.RequiredFiles.Keys
-                If Not Completed.Contains(RelativePath) Then
-                    RemainingInPass += 1
-                End If
-            Next
-            Logger.Warn(CdnLoader.Error,
-                $"战争雷霆 CDN 本轮下载未完成，剩余 {RemainingInPass} 个文件")
+        Dim RemainingInPass As Integer = 0
+        For Each RelativePath As String In Plan.RequiredFiles.Keys
+            If Not Completed.Contains(RelativePath) Then RemainingInPass += 1
+        Next
+        If RemainingInPass > 0 Then
+            Logger.Warn(
+                $"下载引擎本轮仍有 {RemainingInPass} 个文件未完成，" &
+                $"已接收 {StringUtils.FormatByteSize(Interlocked.Read(Context.BytesRead))}。")
         End If
         Return Math.Max(
             0,
             WarThunderCompletedFileBytes(TotalPlan, Completed) -
             CompletedBytesAtStart)
     End Function
+
+    Private Sub WarThunderHttpDownloadWorker(
+        Context As WarThunderHttpDownloadContext,
+        Queue As ConcurrentQueue(Of WarThunderHttpChunk),
+        Client As HttpClient)
+        Do
+            If Context.Cancellation.IsCancellationRequested Then Return
+            Dim Chunk As WarThunderHttpChunk = Nothing
+            If Not Queue.TryDequeue(Chunk) Then Return
+            If WarThunderDownloadHttpChunk(Context, Client, Chunk) Then
+                Dim Remaining As Integer =
+                    Interlocked.Decrement(Chunk.FileTask.RemainingChunks)
+                If Remaining = 0 AndAlso
+                   WarThunderFinalizeHttpFileTask(Chunk.FileTask) Then
+                    Context.SuccessfulPaths.Add(Chunk.FileTask.RelativePath)
+                    Interlocked.Increment(Context.CompletedFiles)
+                End If
+            End If
+        Loop
+    End Sub
+
+    Private Function WarThunderDownloadHttpChunk(
+        Context As WarThunderHttpDownloadContext,
+        Client As HttpClient,
+        Chunk As WarThunderHttpChunk) As Boolean
+        If Chunk Is Nothing OrElse Chunk.FileTask Is Nothing OrElse
+           Chunk.FileTask.Sources.Count = 0 Then Return False
+        Dim MaxAttempts As Integer = Math.Max(
+            2, Math.Min(6, Chunk.FileTask.Sources.Count))
+        Dim WritePath As String = Chunk.PartPath & ".writing"
+        Directory.CreateDirectory(Path.GetDirectoryName(Chunk.PartPath))
+        For Attempt As Integer = 0 To MaxAttempts - 1
+            If Context.Cancellation.IsCancellationRequested Then Return False
+            Dim SourceIndex As Integer =
+                (Chunk.Index + Attempt) Mod Chunk.FileTask.Sources.Count
+            Dim Url As String = Chunk.FileTask.Sources(SourceIndex)
+            Try
+                FileUtils.Delete(WritePath)
+                Using RequestCancellation As Threading.CancellationTokenSource =
+                    Threading.CancellationTokenSource.CreateLinkedTokenSource(
+                        Context.Cancellation.Token)
+                    RequestCancellation.CancelAfter(
+                        TimeSpan.FromSeconds(HttpChunkIdleTimeoutSeconds))
+                Using Request As New HttpRequestMessage(HttpMethod.Get, Url)
+                    If Not Chunk.FileTask.IsWholeFile Then
+                        Request.Headers.Range = New Headers.RangeHeaderValue(
+                            Chunk.StartByte, Chunk.EndByte)
+                    End If
+                    Using Response As HttpResponseMessage = Client.SendAsync(
+                        Request, HttpCompletionOption.ResponseHeadersRead,
+                        RequestCancellation.Token).GetAwaiter().GetResult()
+                        If Not Chunk.FileTask.IsWholeFile Then
+                            If Response.StatusCode <> Net.HttpStatusCode.PartialContent Then
+                                Throw New InvalidDataException(
+                                    $"CDN 不支持分段请求或返回了 HTTP {CInt(Response.StatusCode)}。")
+                            End If
+                        ElseIf Response.StatusCode <> Net.HttpStatusCode.OK AndAlso
+                               Response.StatusCode <> Net.HttpStatusCode.PartialContent Then
+                            Response.EnsureSuccessStatusCode()
+                        End If
+
+                        Dim ExpectedLength As Long = Chunk.Length
+                        Dim ContentLength As Long =
+                            Response.Content.Headers.ContentLength.GetValueOrDefault(-1)
+                        If ContentLength >= 0 AndAlso
+                           ContentLength <> ExpectedLength Then
+                            Throw New InvalidDataException(
+                                $"CDN 分段大小不符：期望 {ExpectedLength}，实际 {ContentLength}。")
+                        End If
+
+                        Dim Written As Long = 0
+                        Dim AttemptStarted As Date = Date.UtcNow
+                        Dim BufferSize As Integer = CInt(Math.Min(
+                            CLng(HttpChunkReadBuffer),
+                            Math.Max(8L * 1024, ExpectedLength)))
+                        Using Input = Response.Content.ReadAsStreamAsync().
+                            GetAwaiter().GetResult()
+                            Using Output As New FileStream(
+                                WritePath, FileMode.Create, FileAccess.Write,
+                                FileShare.None, HttpChunkReadBuffer, FileOptions.SequentialScan)
+                                Dim Buffer As Byte() = New Byte(BufferSize - 1) {}
+                                Do
+                                    RequestCancellation.CancelAfter(
+                                        TimeSpan.FromSeconds(HttpChunkIdleTimeoutSeconds))
+                                    Dim ReadCount As Integer = Input.ReadAsync(
+                                        Buffer, 0, Buffer.Length,
+                                        RequestCancellation.Token).
+                                        GetAwaiter().GetResult()
+                                    If ReadCount <= 0 Then Exit Do
+                                    Output.Write(Buffer, 0, ReadCount)
+                                    Written += ReadCount
+                                    Interlocked.Add(Context.BytesRead, ReadCount)
+                                    If Written > ExpectedLength Then
+                                        Throw New InvalidDataException(
+                                            "CDN 返回的数据超过请求的分段大小。")
+                                    End If
+                                    Dim AttemptSeconds As Double =
+                                        Math.Max(0.001,
+                                            (Date.UtcNow - AttemptStarted).TotalSeconds)
+                                    If AttemptSeconds >= HttpSlowSourceWindowSeconds AndAlso
+                                       Written / AttemptSeconds <
+                                       HttpSlowSourceMinimumBytesPerSecond Then
+                                        Throw New TimeoutException(
+                                            $"CDN 来源速度过慢：{Url}")
+                                    End If
+                                Loop
+                            End Using
+                        End Using
+                        If Written <> ExpectedLength Then
+                            Throw New EndOfStreamException(
+                                $"CDN 数据不完整：期望 {ExpectedLength}，实际 {Written}。")
+                        End If
+                    End Using
+                End Using
+                End Using
+
+                FileUtils.Delete(Chunk.PartPath)
+                File.Move(WritePath, Chunk.PartPath)
+                Return True
+            Catch ex As OperationCanceledException
+                FileUtils.Delete(WritePath)
+                If Context.Cancellation.IsCancellationRequested Then Return False
+            Catch ex As Exception
+                FileUtils.Delete(WritePath)
+                If Attempt = MaxAttempts - 1 Then
+                    Logger.Warn(
+                        ex,
+                        $"战争雷霆 HTTP 下载失败（{Chunk.FileTask.RelativePath}，" &
+                        $"分段 {Chunk.Index}，来源 {Url}）")
+                Else
+                    Thread.Sleep(180 * (Attempt + 1))
+                End If
+            End Try
+        Next
+        Return False
+    End Function
+
+    Private Function WarThunderFinalizeHttpFileTask(
+        FileTask As WarThunderHttpFileTask) As Boolean
+        Try
+            Directory.CreateDirectory(Path.GetDirectoryName(FileTask.FinalPath))
+            If FileTask.IsWholeFile Then
+                WarThunderValidateHttpDownload(
+                    FileTask.TempPath, FileTask.Entry)
+            Else
+                FileUtils.Delete(FileTask.TempPath)
+                Using Output As New FileStream(
+                    FileTask.TempPath, FileMode.Create, FileAccess.Write,
+                    FileShare.None, 1024 * 1024, FileOptions.SequentialScan)
+                    For Each Chunk In FileTask.Chunks.
+                        OrderBy(Function(Item) Item.Index)
+                        If Not File.Exists(Chunk.PartPath) Then
+                            Throw New FileNotFoundException(
+                                $"HTTP 分段文件不存在：{Chunk.PartPath}")
+                        End If
+                        Using Input As New FileStream(
+                            Chunk.PartPath, FileMode.Open, FileAccess.Read,
+                            FileShare.Read, 1024 * 1024, FileOptions.SequentialScan)
+                            Input.CopyTo(Output, 1024 * 1024)
+                        End Using
+                    Next
+                End Using
+                WarThunderValidateHttpDownload(
+                    FileTask.TempPath, FileTask.Entry)
+            End If
+
+            WarThunderAtomicReplace(FileTask.TempPath, FileTask.FinalPath)
+            WarThunderSetFileTimestamp(
+                FileTask.FinalPath, FileTask.Entry.ModifiedTime)
+            For Each Chunk In FileTask.Chunks
+                If Not Chunk.PartPath.Equals(
+                    FileTask.FinalPath, StringComparison.OrdinalIgnoreCase) Then
+                    FileUtils.Delete(Chunk.PartPath)
+                End If
+            Next
+            Return True
+        Catch ex As Exception
+            Logger.Warn(
+                ex, $"战争雷霆 HTTP 文件校验或落地失败：{FileTask.RelativePath}")
+            WarThunderDeleteHttpFileTaskArtifacts(FileTask)
+            Return False
+        End Try
+    End Function
+
+    Private Sub WarThunderValidateHttpDownload(
+        FilePath As String,
+        Entry As WarThunderYupFile)
+        If Not File.Exists(FilePath) Then
+            Throw New FileNotFoundException("HTTP 下载文件不存在。", FilePath)
+        End If
+        If New FileInfo(FilePath).Length <> Entry.Length Then
+            Throw New InvalidDataException(
+                $"HTTP 下载文件大小不符：期望 {Entry.Length}，" &
+                $"实际 {New FileInfo(FilePath).Length}。")
+        End If
+        If Not WarThunderFileHashEquals(FilePath, Entry.Sha1) Then
+            Throw New InvalidDataException("HTTP 下载文件 SHA-1 校验失败。")
+        End If
+    End Sub
+
+    Private Sub WarThunderDeleteHttpFileTaskArtifacts(
+        FileTask As WarThunderHttpFileTask)
+        If FileTask Is Nothing Then Return
+        FileUtils.Delete(FileTask.TempPath)
+        For Each Chunk In FileTask.Chunks
+            FileUtils.Delete(Chunk.PartPath)
+            FileUtils.Delete(Chunk.PartPath & ".writing")
+        Next
+    End Sub
 
     Private Function WarThunderCreateCdnFileSources(
         WebSeeds As IEnumerable(Of Uri),
@@ -869,10 +1542,12 @@ Friend Module ModWarThunderSelfUpdate
         Dim Wanted As New HashSet(Of String)(
             ZipEntries.Select(Function(Name) Name.Replace("\", "/")),
             StringComparer.OrdinalIgnoreCase)
+        Dim Extracted As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
         Using Archive As ZipArchive = ZipFile.OpenRead(ZipPath)
             For Each Entry In Archive.Entries
                 If Entry.FullName.EndsWith("/", StringComparison.Ordinal) Then Continue For
-                If Not Wanted.Contains(Entry.FullName.Replace("\", "/")) Then Continue For
+                Dim RelativeEntryName As String = Entry.FullName.Replace("\", "/")
+                If Not Wanted.Contains(RelativeEntryName) Then Continue For
                 Dim DestinationPath As String =
                     WarThunderSafeInstallPath(DestinationRoot, Entry.FullName)
                 If DestinationPath = "" Then
@@ -884,8 +1559,16 @@ Friend Module ModWarThunderSelfUpdate
                 Entry.ExtractToFile(TempPath, True)
                 WarThunderAtomicReplace(TempPath, DestinationPath)
                 WarThunderSetFileTimestamp(DestinationPath, ModifiedTime)
+                Extracted.Add(RelativeEntryName)
             Next
         End Using
+        Dim MissingEntries As List(Of String) = Wanted.
+            Where(Function(Name) Not Extracted.Contains(Name)).
+            Take(5).ToList()
+        If MissingEntries.Count > 0 Then
+            Throw New InvalidDataException(
+                $"压缩包缺少更新清单要求的文件：{String.Join("、", MissingEntries)}")
+        End If
     End Sub
 
     Private Sub WarThunderApplySelfUpdateManifest(
@@ -1246,16 +1929,63 @@ Friend Module ModWarThunderSelfUpdate
         TotalBytes As Long,
         RemainingFiles As Integer,
         Optional DownloadedBytes As Long = -1)
+        Dim EffectiveDownloadedBytes As Long =
+            If(DownloadedBytes >= 0, DownloadedBytes, WarThunderUpdateDownloadedBytes)
+        Dim DisplayStatus As String = Status
+        If Speed > 0 AndAlso TotalBytes > 0 AndAlso
+           EffectiveDownloadedBytes >= 0 AndAlso
+           EffectiveDownloadedBytes < TotalBytes Then
+            Dim RemainingBytes As Long =
+                Math.Max(0, TotalBytes - EffectiveDownloadedBytes)
+            Dim EtaSeconds As Double =
+                Math.Ceiling(RemainingBytes / CDbl(Speed))
+            If EtaSeconds > 0 AndAlso EtaSeconds <= Long.MaxValue Then
+                DisplayStatus &= "  预计剩余 " & WarThunderFormatEta(CLng(EtaSeconds))
+            End If
+        End If
+
         Loader.Progress = Math.Max(0, Math.Min(1, Progress))
-        Loader.DownloadStatus = Status
+        Loader.DownloadStatus = DisplayStatus
         Loader.DownloadSpeed = Math.Max(0, Speed)
         Loader.FilesRemaining = RemainingFiles
         WarThunderUpdateProgress = Loader.Progress
-        WarThunderUpdateStatus = Status
+        WarThunderUpdateStatus = DisplayStatus
         WarThunderUpdateSpeed = Math.Max(0, Speed)
         If TotalBytes > 0 Then WarThunderUpdateTotalBytes = TotalBytes
         If DownloadedBytes >= 0 Then WarThunderUpdateDownloadedBytes = DownloadedBytes
+
+        Dim Now As Date = Date.UtcNow
+        If (Now - WarThunderLastStateUiRefresh).TotalMilliseconds >= 500 Then
+            WarThunderLastStateUiRefresh = Now
+            WarThunderRefreshAllUI()
+        End If
     End Sub
+
+    Private Function WarThunderFormatEta(Seconds As Long) As String
+        If Seconds < 60 Then Return $"{Math.Max(1, Seconds)} 秒"
+        If Seconds < 60 * 60 Then
+            Dim Minutes As Long = Seconds \ 60
+            Dim RemainingSeconds As Long = Seconds Mod 60
+            Return If(
+                RemainingSeconds = 0,
+                $"{Minutes} 分钟",
+                $"{Minutes} 分 {RemainingSeconds} 秒")
+        End If
+        If Seconds < 24 * 60 * 60 Then
+            Dim Hours As Long = Seconds \ (60 * 60)
+            Dim Minutes As Long = (Seconds Mod (60 * 60)) \ 60
+            Return If(
+                Minutes = 0,
+                $"{Hours} 小时",
+                $"{Hours} 小时 {Minutes} 分")
+        End If
+        Dim Days As Long = Seconds \ (24 * 60 * 60)
+        Dim RemainingHours As Long = (Seconds Mod (24 * 60 * 60)) \ (60 * 60)
+        Return If(
+            RemainingHours = 0,
+            $"{Days} 天",
+            $"{Days} 天 {RemainingHours} 小时")
+    End Function
 
     Private Sub WarThunderThrowIfSelfUpdateCanceled(
         Loader As LoaderTask(Of WarThunderInstallation, Boolean))
@@ -1287,17 +2017,137 @@ Friend Module ModWarThunderSelfUpdate
         End Try
     End Function
 
+    Private Function WarThunderSelfUpdateLocalFileMatches(
+        LocalPath As String,
+        Entry As WarThunderYupFile) As Boolean
+        If String.IsNullOrWhiteSpace(LocalPath) OrElse
+           Entry Is Nothing OrElse Not File.Exists(LocalPath) Then
+            Return False
+        End If
+        Try
+            If New FileInfo(LocalPath).Length <> Entry.Length Then Return False
+        Catch
+            Return False
+        End Try
+        Return WarThunderLocalTimeMatchesYup(LocalPath, Entry)
+    End Function
+
+    Private Function WarThunderSelfUpdateLocalFileMatchesSha1(
+        LocalPath As String,
+        Entry As WarThunderYupFile) As Boolean
+        If String.IsNullOrWhiteSpace(LocalPath) OrElse
+           Entry Is Nothing OrElse Not File.Exists(LocalPath) Then
+            Return False
+        End If
+        Try
+            If New FileInfo(LocalPath).Length <> Entry.Length Then Return False
+            If Entry.Sha1 Is Nothing OrElse Entry.Sha1.Length = 0 Then Return True
+            Return WarThunderFileHashEquals(LocalPath, Entry.Sha1)
+        Catch ex As Exception
+            Logger.Warn(ex, $"校验本地游戏文件失败：{Entry.RelativePath}")
+            Return False
+        End Try
+    End Function
+
+    Private Function WarThunderSelfUpdateLocalFileCanBeReused(
+        LocalPath As String,
+        Entry As WarThunderYupFile) As Boolean
+        If WarThunderSelfUpdateLocalFileMatches(LocalPath, Entry) Then Return True
+        If String.IsNullOrWhiteSpace(LocalPath) OrElse
+           Entry Is Nothing OrElse Not File.Exists(LocalPath) Then
+            Return False
+        End If
+        Try
+            If New FileInfo(LocalPath).Length <> Entry.Length Then Return False
+        Catch
+            Return False
+        End Try
+        If Entry.Sha1 Is Nothing OrElse Entry.Sha1.Length = 0 Then Return False
+        Try
+            Return WarThunderFileHashEquals(LocalPath, Entry.Sha1)
+        Catch ex As Exception
+            Logger.Warn(ex, $"校验本地更新压缩包失败：{Entry.RelativePath}")
+            Return False
+        End Try
+    End Function
+
+    Private Function WarThunderShouldProcessSelfUpdateEntry(
+        RelativePath As String) As Boolean
+        Dim PathText As String = RelativePath.Replace("\", "/").ToLowerInvariant()
+        For Each Prefix In {
+            "android/", "linux/", "linux64/", "mac/", "mac_app/", "mac_cef/",
+            "mac_sign/", "ps4/", "ps5/", "scarlett/", "xbone/", "win-arm64ec/"
+        }
+            If PathText.StartsWith(Prefix, StringComparison.Ordinal) Then Return False
+        Next
+        For Each Name In {
+            "frameworks.zip",
+            "linux64/linux64.zip",
+            "mac.zip",
+            "mac_app.zip",
+            "mac_cef_bin.zip",
+            "mac_cef_framework.zip",
+            "mac_sign.zip",
+            "stcode_linux64.zip",
+            "stcode_macosx.zip"
+        }
+            If PathText.Equals(Name, StringComparison.Ordinal) Then Return False
+        Next
+        If PathText.StartsWith("content/hc_pacific/", StringComparison.Ordinal) Then
+            Return False
+        End If
+        If Not Environment.Is64BitOperatingSystem Then
+            Return Not PathText.StartsWith("win64/", StringComparison.Ordinal) AndAlso
+                   Not PathText.Equals("stcode_win64.zip", StringComparison.Ordinal)
+        End If
+        Dim ProcessorArchitecture As String =
+            If(Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE"), "")
+        If Not ProcessorArchitecture.Equals("ARM64", StringComparison.OrdinalIgnoreCase) Then
+            If PathText.StartsWith("win-arm64ec/", StringComparison.Ordinal) OrElse
+               PathText.Equals("stcode_win-arm64ec.zip", StringComparison.Ordinal) Then
+                Return False
+            End If
+        End If
+        Return True
+    End Function
+
     Private Function WarThunderZipTargetsExist(
         InstallPath As String,
         Entry As WarThunderYupFile) As Boolean
         If Entry.ZipEntries.Count = 0 Then Return True
-        Dim Folder As String = Path.GetDirectoryName(
-            WarThunderSafeInstallPath(InstallPath, Entry.RelativePath))
-        For Each ZipEntry In Entry.ZipEntries
-            Dim TargetPath As String = WarThunderSafeInstallPath(Folder, ZipEntry)
-            If TargetPath = "" OrElse Not File.Exists(TargetPath) Then Return False
-        Next
-        Return True
+        Dim ZipPath As String =
+            WarThunderSafeInstallPath(InstallPath, Entry.RelativePath)
+        If ZipPath = "" OrElse Not File.Exists(ZipPath) Then Return False
+        Dim Folder As String = Path.GetDirectoryName(ZipPath)
+        Try
+            Using Archive As ZipArchive = ZipFile.OpenRead(ZipPath)
+                Dim ArchiveEntries As New Dictionary(Of String, ZipArchiveEntry)(
+                    StringComparer.OrdinalIgnoreCase)
+                For Each ArchiveEntry In Archive.Entries
+                    If Not ArchiveEntry.FullName.EndsWith("/", StringComparison.Ordinal) Then
+                        ArchiveEntries(ArchiveEntry.FullName.Replace("\", "/")) = ArchiveEntry
+                    End If
+                Next
+                For Each ZipEntry In Entry.ZipEntries
+                    Dim RelativeEntryName As String = ZipEntry.Replace("\", "/")
+                    Dim ArchiveEntry As ZipArchiveEntry = Nothing
+                    If Not ArchiveEntries.TryGetValue(
+                        RelativeEntryName, ArchiveEntry) Then
+                        Return False
+                    End If
+                    Dim TargetPath As String =
+                        WarThunderSafeInstallPath(Folder, RelativeEntryName)
+                    If TargetPath = "" OrElse Not File.Exists(TargetPath) OrElse
+                       New FileInfo(TargetPath).Length <> ArchiveEntry.Length Then
+                        Return False
+                    End If
+                Next
+            End Using
+            Return True
+        Catch ex As Exception
+            Logger.Warn(ex, $"检查战争雷霆压缩包展开结果失败：{Entry.RelativePath}")
+            Return False
+        End Try
     End Function
 
     Private Function WarThunderShouldAddNewSelfUpdateFile(
@@ -1312,6 +2162,22 @@ Friend Module ModWarThunderSelfUpdate
         }
             If PathText.StartsWith(Prefix, StringComparison.Ordinal) Then Return False
         Next
+        For Each FileName In {
+            "frameworks.zip",
+            "mac.zip",
+            "mac_app.zip",
+            "mac_cef_bin.zip",
+            "mac_cef_framework.zip",
+            "mac_sign.zip",
+            "stcode_linux64.zip",
+            "stcode_macosx.zip",
+            "stcode_win-arm64ec.zip"
+        }
+            If PathText.Equals(FileName, StringComparison.Ordinal) Then Return False
+        Next
+        If PathText.StartsWith("content/hc_pacific/", StringComparison.Ordinal) Then
+            Return False
+        End If
 
         If PathText.StartsWith("content.hq/uhq_aircraft/", StringComparison.Ordinal) OrElse
            PathText.StartsWith("patch/content.hq/uhq_aircraft/", StringComparison.Ordinal) Then

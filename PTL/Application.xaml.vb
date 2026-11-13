@@ -101,7 +101,7 @@ RetryCacheCheck:
             End If
             '设置初始窗口
             If Settings.Get(Of Boolean)("UiLauncherLogo") Then
-                FrmStart = New SplashScreen("Images\icon.ico")
+                FrmStart = New SplashScreen("Images\splash.png")
                 FrmStart.Show(False, True)
             End If
             '基础信息
@@ -208,7 +208,7 @@ RetryCacheCheck:
 
     '动态 DLL 加载
     Private Sub New() '这里必须尽早调用，且不能使用任何库，否则加载 MeloongCore 就会导致崩溃
-        Static Prefixes As String() = {"NAudio", "Newtonsoft.Json", "Ookii.Dialogs.Wpf", "Imazen.WebP", "CacheCow.Common", "CacheCow.Client.FileStore", "CacheCow.Client", "ThrottleDebounce", "System.Net.Http.Formatting", "Microsoft.Win32.Registry", "MeloongCore.Wpf", "MeloongCore"}
+        Static Prefixes As String() = {"NAudio", "Newtonsoft.Json", "Ookii.Dialogs.Wpf", "Imazen.WebP", "CacheCow.Common", "CacheCow.Client.FileStore", "CacheCow.Client", "ThrottleDebounce", "System.Net.Http.Formatting", "Microsoft.Win32.Registry", "MeloongCore.Wpf", "MeloongCore", "MonoTorrent", "Mono.Nat", "ReusableTasks"}
         Static LoadedAssemblies As New ConcurrentDictionary(Of String, Lazy(Of Assembly))(StringComparer.Ordinal) '缓存
         AddHandler AppDomain.CurrentDomain.AssemblyResolve,
         Function(sender As Object, Args As ResolveEventArgs) As Assembly

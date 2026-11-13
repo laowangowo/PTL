@@ -76,7 +76,7 @@ Public Class PageWarThunderTools
                 InstalledTools.TryGetValue(ToolKey, InstalledTool)
             End If
             Details.Children.Add(New TextBlock With {
-                .Text = Name & If(String.IsNullOrWhiteSpace(Version), "", " · " & Version),
+                .Text = Name & If(String.IsNullOrWhiteSpace(Version), "", "  " & Version),
                 .FontSize = 14.5,
                 .FontWeight = FontWeights.SemiBold,
                 .Foreground = TryCast(FindResource("ColorBrush1"), Media.Brush)
@@ -104,7 +104,7 @@ Public Class PageWarThunderTools
             End If
             Dim FileSize As Long = Item.Value(Of Long?)("size").GetValueOrDefault(0)
             Details.Children.Add(New TextBlock With {
-                .Text = $"{FormatSize(FileSize)} · {Item.Value(Of String)("filename")}",
+                .Text = $"{FormatSize(FileSize)}  {Item.Value(Of String)("filename")}",
                 .Margin = New Thickness(0, 5, 0, 0),
                 .FontSize = 11,
                 .Foreground = TryCast(FindResource("ColorBrushGray2"), Media.Brush)

@@ -260,7 +260,7 @@
         If SubTask.FilesRemaining >= 0 Then
             Parts.Add($"剩余 {SubTask.FilesRemaining} 个文件")
         End If
-        Return String.Join(" · ", Parts)
+        Return String.Join("  ", Parts)
     End Function
 
     Public Sub TaskRemove(Loader As Object)

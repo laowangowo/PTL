@@ -92,7 +92,12 @@ Friend NotInheritable Class WarThunderYupSnapshot
                         ModifiedTimeObject, CultureInfo.InvariantCulture)
                 End If
                 ResultEntry.Sha1 = TryCast(Entry.ItemOrDefault("sha1"), Byte())
-                ResultEntry.ZipEntries.AddRange(WarThunderYupStrings(Entry.ItemOrDefault("zip")))
+                Dim ZipEntries = WarThunderYupStrings(Entry.ItemOrDefault("zipp"))
+                If ZipEntries.Count = 0 Then
+                    '兼容旧版清单可能使用的字段名。
+                    ZipEntries = WarThunderYupStrings(Entry.ItemOrDefault("zip"))
+                End If
+                ResultEntry.ZipEntries.AddRange(ZipEntries)
                 Result.Files(RelativePath) = ResultEntry
             Next
             Return Result

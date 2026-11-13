@@ -34,8 +34,8 @@ Public Class MyWarThunderResourceItem
         Dim CreatedAt As String = ReadString(Item("created_at"))
         Dim CreatedText As String = FormatCreatedAt(CreatedAt)
         LabMeta.Text =
-            $"{AuthorName}  ·  下载 {Downloads:N0}  ·  点赞 {Likes:N0}  ·  " &
-            $"{FormatSize(FileSize)}{If(CreatedText = "", "", "  ·  " & CreatedText)}"
+            $"{AuthorName}  下载:{Downloads:N0}  点赞:{Likes:N0}  " &
+            $"{FormatSize(FileSize)}{If(CreatedText = "", "", "    " & CreatedText)}"
 
         PostUrl = ReadString(Item("post_url"))
         Dim PreviewUrl As String = ReadString(Item("preview_image"))

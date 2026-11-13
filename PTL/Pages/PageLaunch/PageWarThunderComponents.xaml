@@ -56,7 +56,7 @@
                                         Background="#A9BBC8" />
                                 <TextBlock x:Name="LabPreviewBackground"
                                            Grid.Column="1"
-                                           Text="预览背景 · #A9BBC8"
+                                           Text="预览背景   #A9BBC8"
                                            Margin="9,0,8,0"
                                            FontSize="11.5"
                                            VerticalAlignment="Center"
@@ -91,6 +91,8 @@
                             <ColumnDefinition Width="1*" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock x:Name="LabStatus" Text="正在读取已安装组件…"
@@ -104,7 +106,13 @@
                         <local:MyButton x:Name="BtnRefresh" Grid.Column="1"
                                         Text="刷新" Width="86" Height="34"
                                         Margin="12,0,8,0" />
-                        <local:MyButton x:Name="BtnOpen" Grid.Column="2"
+                        <local:MyButton x:Name="BtnTextToggle" Grid.Column="2"
+                                        Text="启用自定义文本" Width="122" Height="34"
+                                        Margin="0,0,8,0" Visibility="Collapsed" />
+                        <local:MyButton x:Name="BtnTextGuide" Grid.Column="3"
+                                        Text="教程" Width="72" Height="34"
+                                        Margin="0,0,8,0" Visibility="Collapsed" />
+                        <local:MyButton x:Name="BtnOpen" Grid.Column="4"
                                         Text="打开目录" Width="105" Height="34" />
                     </Grid>
                     <StackPanel x:Name="PanComponents" Margin="0,14,0,0" />

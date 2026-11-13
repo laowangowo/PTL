@@ -142,6 +142,15 @@
   <data name="MeloongCore.Wpf" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\..\MeloongCore\Wpf\bin\MeloongCore.Wpf.dll;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
+  <data name="Mono.Nat" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Mono.Nat.dll;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="MonoTorrent" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\MonoTorrent.dll;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="ReusableTasks" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\ReusableTasks.dll;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
   <data name="Microsoft.Win32.Registry" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\..\MeloongCore\Wpf\bin\Microsoft.Win32.Registry.dll;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>

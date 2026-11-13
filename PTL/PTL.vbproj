@@ -82,7 +82,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup>
-    <ApplicationIcon>Images\icon.ico</ApplicationIcon>
+    <ApplicationIcon>..\Resources\ptl-wt.ico</ApplicationIcon>
   </PropertyGroup>
   <PropertyGroup>
     <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
@@ -575,7 +575,10 @@
     </BootstrapperPackage>
   </ItemGroup>
   <ItemGroup>
-    <Resource Include="Images\icon.ico" />
+    <Resource Include="..\Resources\ptl.ico">
+      <Link>Images\ptl.ico</Link>
+    </Resource>
+    <Resource Include="Images\splash.png" />
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Resources\Font.ttf" />
@@ -676,6 +679,9 @@
   <ItemGroup>
     <None Include="Resources\Imazen.WebP.dll" />
     <None Include="Resources\libwebp64.dll" />
+    <None Include="Resources\Mono.Nat.dll" />
+    <None Include="Resources\MonoTorrent.dll" />
+    <None Include="Resources\ReusableTasks.dll" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\CacheCow.Client.FileStore.dll" />

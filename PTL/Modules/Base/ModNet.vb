@@ -529,6 +529,12 @@ Retry:
         ''' </summary>
         Public ReadOnly Property Speed As Long
             Get
+                If State <> NetState.Downloading Then
+                    _Speed = 0
+                    SpeedLastDone = DownloadDone
+                    SpeedLastTime = GetTimeMs()
+                    Return 0
+                End If
                 If GetTimeMs() - SpeedLastTime > 200 Then
                     Dim DeltaTime As Long = GetTimeMs() - SpeedLastTime
                     _Speed = (DownloadDone - SpeedLastDone) / (DeltaTime / 1000)
@@ -727,6 +733,12 @@ Retry:
         ''' </summary>
         Public ReadOnly Property Speed As Long
             Get
+                If State <> NetState.Downloading Then
+                    _Speed = 0
+                    SpeedLastDone = DownloadDone
+                    SpeedLastTime = GetTimeMs()
+                    Return 0
+                End If
                 If GetTimeMs() - SpeedLastTime > 200 Then
                     Dim DeltaTime As Long = GetTimeMs() - SpeedLastTime
                     _Speed = (DownloadDone - SpeedLastDone) / (DeltaTime / 1000)
@@ -1425,7 +1437,9 @@ FinishExCatch:
             Dim CurrentSpeed As Long = 0
             For Each File In Files
                 If File.State <> NetState.Finished Then Remaining += 1
-                CurrentSpeed += Math.Max(0, File.Speed)
+                If File.State = NetState.Downloading Then
+                    CurrentSpeed += Math.Max(0, File.Speed)
+                End If
             Next
             FilesRemaining = Remaining
             DownloadSpeed = CurrentSpeed

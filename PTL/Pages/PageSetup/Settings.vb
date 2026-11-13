@@ -84,6 +84,7 @@ Public Class Settings
         New Setting("UiMusicWarThunder", True),
         New Setting("UiStatsPlayTimeFormat", 0),
         New Setting("WarThunderSightPreviewBackground", "#A9BBC8"),
+        New Setting("WarThunderLaunchWithPrograms", "", Source:=Sources.Registry),
         New Setting("UiHiddenPageDownload", False, OnChanged:=AddressOf PageSetupUI.HiddenRefresh),
         New Setting("UiHiddenPageLink", False, OnChanged:=AddressOf PageSetupUI.HiddenRefresh),
         New Setting("UiHiddenPageSetup", False, OnChanged:=AddressOf PageSetupUI.HiddenRefresh),
